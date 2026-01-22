@@ -1,0 +1,20 @@
+# Build artifacts
+build/
+dist/
+*.egg-info/
+
+# Python
+__pycache__/
+*.pyc
+
+# CMake / Ninja / Make
+CMakeFiles/
+CMakeCache.txt
+cmake_install.cmake
+*.ninja
+*.ninja_deps
+*.ninja_log
+
+# IDE
+.idea/
+.vscode/
