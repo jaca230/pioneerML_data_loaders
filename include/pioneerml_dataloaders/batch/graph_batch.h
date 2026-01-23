@@ -21,6 +21,7 @@ struct GraphBatch : public BaseBatch {
   std::vector<uint8_t> hit_mask;        // [total_nodes]
   std::vector<int64_t> time_group_ids;  // [total_nodes]
   std::vector<int64_t> y_node;          // [total_nodes]
+  std::vector<int64_t> particle_mask;   // [total_nodes]
   // Per-graph labels
   std::vector<float> y;         // [num_graphs, 3]
   std::vector<float> y_energy;  // [num_graphs, 3]

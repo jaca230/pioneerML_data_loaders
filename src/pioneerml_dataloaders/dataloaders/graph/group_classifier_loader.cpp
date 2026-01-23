@@ -1,6 +1,7 @@
 #include "pioneerml_dataloaders/dataloaders/graph/group_classifier_loader.h"
 
-#include "pioneerml_dataloaders/derived/time_grouper.h"
+#include "pioneerml_dataloaders/data_derivers/time_grouper.h"
+#include "pioneerml_dataloaders/data_derivers/particle_mask_deriver.h"
 #include "pioneerml_dataloaders/io/reader_utils.h"
 
 #include <arrow/api.h>
@@ -63,7 +64,13 @@ std::shared_ptr<arrow::Table> GroupClassifierLoader::LoadTable(const std::string
 
 std::unique_ptr<GraphBatch> GroupClassifierLoader::BuildGraph(const arrow::Table& table) const {
   auto cols = BindColumns(std::shared_ptr<arrow::Table>(const_cast<arrow::Table*>(&table), [](arrow::Table*) {}));
-  derived::TimeGrouper grouper(cfg_.time_window_ns);
+  data_derivers::TimeGrouper grouper(cfg_.time_window_ns);
+  data_derivers::ParticleMaskDeriver mask_deriver;
+
+  auto time_groups_array = grouper.DeriveColumn(table);
+  auto mask_array = mask_deriver.DeriveColumn(table);
+  const auto* time_groups_list = time_groups_array ? static_cast<const arrow::ListArray*>(time_groups_array.get()) : nullptr;
+  const auto* masks_list = mask_array ? static_cast<const arrow::ListArray*>(mask_array.get()) : nullptr;
 
   auto batch = std::make_unique<GraphBatch>();
   batch->node_ptr.reserve(table.num_rows() + 1);
@@ -86,9 +93,28 @@ std::unique_ptr<GraphBatch> GroupClassifierLoader::BuildGraph(const arrow::Table
     auto edeps = io::ListToVector<arrow::DoubleType, double>(hits_edep, row);
     auto views = io::ListToVector<arrow::Int32Type, int64_t>(hits_view, row);
     auto pdgs = io::ListToVector<arrow::Int32Type, int64_t>(hits_pdg, row);
-    auto times = io::ListToVector<arrow::DoubleType, double>(hits_time, row);
-
     size_t n = zs.size();
+    std::vector<int64_t> time_groups;
+    std::vector<int64_t> masks;
+    if (time_groups_list && cfg_.compute_time_groups) {
+      auto offsets = time_groups_list->raw_value_offsets();
+      auto values = std::static_pointer_cast<arrow::NumericArray<arrow::Int64Type>>(time_groups_list->values());
+      const int64_t* raw = values->raw_values();
+      for (int32_t i = offsets[row]; i < offsets[row + 1]; ++i) {
+        time_groups.push_back(raw[i]);
+      }
+    } else {
+      time_groups.assign(n, 0);
+    }
+    if (masks_list) {
+      auto offsets = masks_list->raw_value_offsets();
+      auto values = std::static_pointer_cast<arrow::NumericArray<arrow::Int64Type>>(masks_list->values());
+      const int64_t* raw = values->raw_values();
+      for (int32_t i = offsets[row]; i < offsets[row + 1]; ++i) {
+        masks.push_back(raw[i]);
+      }
+    }
+
     int64_t node_start = batch->node_ptr.back();
 
     for (size_t i = 0; i < n; ++i) {
@@ -100,11 +126,11 @@ std::unique_ptr<GraphBatch> GroupClassifierLoader::BuildGraph(const arrow::Table
       batch->hit_mask.push_back(1);
       batch->time_group_ids.push_back(0);  // fill below
       batch->y_node.push_back(pdgs[i]);
+      batch->particle_mask.push_back(i < masks.size() ? masks[i] : mask_deriver.ComputeSingle(static_cast<int>(pdgs[i])));
     }
 
-    auto tg = cfg_.compute_time_groups ? grouper.Compute(times) : std::vector<int64_t>(n, 0);
-    for (size_t i = 0; i < n; ++i) {
-      batch->time_group_ids[node_start + i] = tg[i];
+    for (size_t i = 0; i < n && i < time_groups.size(); ++i) {
+      batch->time_group_ids[node_start + i] = time_groups[i];
     }
 
     for (int64_t i = 0; i < static_cast<int64_t>(n); ++i) {
