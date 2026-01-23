@@ -2,10 +2,18 @@
 build/
 dist/
 *.egg-info/
+*.so
+*.dylib
+*.dll
 
 # Python
 __pycache__/
 *.pyc
+*.pyo
+*.pyd
+.pytest_cache/
+.venv/
+.env/
 
 # CMake / Ninja / Make
 CMakeFiles/
@@ -14,7 +22,12 @@ cmake_install.cmake
 *.ninja
 *.ninja_deps
 *.ninja_log
+Makefile
 
-# IDE
+# Editor/IDE
 .idea/
 .vscode/
+*.swp
+
+# Generated
+compile_commands.json
