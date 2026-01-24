@@ -2,10 +2,13 @@
 
 #include <memory>
 #include <string>
+#include <unordered_map>
+#include <vector>
 
 #include <arrow/api.h>
 
 #include "pioneerml_dataloaders/batch/base_batch.h"
+#include "pioneerml_dataloaders/data_derivers/base_deriver.h"
 
 namespace pioneerml::dataloaders {
 
@@ -32,6 +35,46 @@ class DataLoader {
  protected:
   // Optional helper for derived loaders that need the raw table.
   virtual std::shared_ptr<arrow::Table> LoadTable(const std::string& parquet_path) const = 0;
+
+  struct DeriverSpec {
+    std::vector<std::string> names;
+    std::shared_ptr<data_derivers::BaseDeriver> deriver;
+  };
+
+  std::vector<DeriverSpec> derivers_;
+
+  void AddDeriver(std::string name, std::shared_ptr<data_derivers::BaseDeriver> deriver);
+  void AddDeriver(std::vector<std::string> names,
+                  std::shared_ptr<data_derivers::BaseDeriver> deriver);
+
+  virtual std::shared_ptr<arrow::Table> AddDerivedColumns(
+      const std::shared_ptr<arrow::Table>& table) const;
+
+  std::vector<std::string> input_columns_;
+  std::vector<std::string> target_columns_;
+
+  std::string JoinNames(const std::vector<std::string>& names,
+                        const std::string& sep = ", ") const;
+
+  std::vector<std::string> MissingColumns(const arrow::Table& table,
+                                          const std::vector<std::string>& required) const;
+
+  void ValidateColumns(const arrow::Table& table,
+                       const std::vector<std::string>& required,
+                       const std::vector<std::string>& optional,
+                       bool require_single_chunk,
+                       const std::string& context) const;
+
+  std::vector<std::string> MergeColumns(const std::vector<std::string>& left,
+                                        const std::vector<std::string>& right) const;
+
+  using ColumnMap = std::unordered_map<std::string, std::shared_ptr<arrow::ChunkedArray>>;
+
+  ColumnMap BindColumns(const arrow::Table& table,
+                        const std::vector<std::string>& names,
+                        bool require_all,
+                        bool require_single_chunk,
+                        const std::string& context) const;
 };
 
 }  // namespace pioneerml::dataloaders

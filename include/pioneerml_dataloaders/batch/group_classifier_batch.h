@@ -2,39 +2,32 @@
 
 #include <cstddef>
 #include <cstdint>
-#include <vector>
+#include <memory>
+
+#include <arrow/api.h>
 
 #include "pioneerml_dataloaders/batch/base_batch.h"
 
 namespace pioneerml {
 
 struct GroupClassifierInputs : public BaseBatch {
-  // Flattened node features [total_nodes, 4]: coord, z, energy, view
-  std::vector<float> node_features;
-  // Edge indices [2, total_edges]
-  std::vector<int64_t> edge_index;
-  // Edge attrs [total_edges, 4]: dx, dz, dE, same_view
-  std::vector<float> edge_attr;
-  // Graph-level features [num_graphs, 1]
-  std::vector<float> u;
-  // Per-node metadata
-  std::vector<uint8_t> hit_mask;        // [total_nodes]
-  std::vector<int64_t> time_group_ids;  // [total_nodes]
-  std::vector<int64_t> y_node;          // [total_nodes]
-  std::vector<int64_t> particle_mask;   // [total_nodes]
+  // Arrow arrays/views over contiguous buffers for zero-copy adapters.
+  std::shared_ptr<arrow::Array> node_features;   // float32, length = total_nodes * 4
+  std::shared_ptr<arrow::Array> edge_index;      // int64,   length = total_edges * 2
+  std::shared_ptr<arrow::Array> edge_attr;       // float32, length = total_edges * 4
+  std::shared_ptr<arrow::Array> u;               // float32, length = num_graphs
+  std::shared_ptr<arrow::Array> time_group_ids;  // int64,   length = total_nodes
+  std::shared_ptr<arrow::Array> node_ptr;        // int64,   length = num_graphs + 1
+  std::shared_ptr<arrow::Array> edge_ptr;        // int64,   length = num_graphs + 1
   // Labels kept here initially; stripped for inference.
-  std::vector<float> y;         // [num_graphs, 3]
-  std::vector<float> y_energy;  // [num_graphs, 3]
-  // Prefix sums to delimit graphs in flattened buffers
-  std::vector<int64_t> node_ptr;  // length num_graphs+1
-  std::vector<int64_t> edge_ptr;  // length num_graphs+1
-
+  std::shared_ptr<arrow::Array> y;         // float32, length = num_graphs * 3
+  std::shared_ptr<arrow::Array> y_energy;  // float32, length = num_graphs * 3
   size_t num_graphs{0};
 };
 
 struct GroupClassifierTargets : public BaseBatch {
-  std::vector<float> y;         // [num_graphs, 3]
-  std::vector<float> y_energy;  // [num_graphs, 3]
+  std::shared_ptr<arrow::Array> y;         // float32, length = num_graphs * 3
+  std::shared_ptr<arrow::Array> y_energy;  // float32, length = num_graphs * 3
   size_t num_graphs{0};
 };
 

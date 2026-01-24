@@ -29,5 +29,5 @@ Makefile
 .vscode/
 *.swp
 
-# Generated
-compile_commands.json
+# Custom 
+.playground/

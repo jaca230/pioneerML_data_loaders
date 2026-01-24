@@ -17,6 +17,8 @@ class GroupClassifierLoader : public GraphLoader {
  public:
   explicit GroupClassifierLoader(GroupClassifierConfig cfg = {});
 
+  TrainingBundle LoadTraining(const std::string& parquet_path) const override;
+  InferenceBundle LoadInference(const std::string& parquet_path) const override;
   std::shared_ptr<arrow::Table> LoadTable(const std::string& parquet_path) const override;
 
  protected:
