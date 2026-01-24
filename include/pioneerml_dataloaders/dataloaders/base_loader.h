@@ -9,13 +9,25 @@
 
 namespace pioneerml::dataloaders {
 
+struct TrainingBundle {
+  std::unique_ptr<BaseBatch> inputs;
+  std::unique_ptr<BaseBatch> targets;
+};
+
+struct InferenceBundle {
+  std::unique_ptr<BaseBatch> inputs;
+};
+
 // Contract for loading parquet shards into a model-ready batch abstraction.
 class DataLoader {
  public:
   virtual ~DataLoader() = default;
 
-  // Top-level API: load a batch from one parquet shard.
-  virtual std::unique_ptr<BaseBatch> Load(const std::string& parquet_path) const = 0;
+  // Load inputs + targets for training.
+  virtual TrainingBundle LoadTraining(const std::string& parquet_path) const = 0;
+
+  // Load inputs only for inference.
+  virtual InferenceBundle LoadInference(const std::string& parquet_path) const = 0;
 
  protected:
   // Optional helper for derived loaders that need the raw table.

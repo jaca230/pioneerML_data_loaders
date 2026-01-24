@@ -8,7 +8,7 @@
 
 namespace pioneerml {
 
-struct GraphBatch : public BaseBatch {
+struct GroupClassifierInputs : public BaseBatch {
   // Flattened node features [total_nodes, 4]: coord, z, energy, view
   std::vector<float> node_features;
   // Edge indices [2, total_edges]
@@ -22,13 +22,19 @@ struct GraphBatch : public BaseBatch {
   std::vector<int64_t> time_group_ids;  // [total_nodes]
   std::vector<int64_t> y_node;          // [total_nodes]
   std::vector<int64_t> particle_mask;   // [total_nodes]
-  // Per-graph labels
+  // Labels kept here initially; stripped for inference.
   std::vector<float> y;         // [num_graphs, 3]
   std::vector<float> y_energy;  // [num_graphs, 3]
   // Prefix sums to delimit graphs in flattened buffers
   std::vector<int64_t> node_ptr;  // length num_graphs+1
   std::vector<int64_t> edge_ptr;  // length num_graphs+1
 
+  size_t num_graphs{0};
+};
+
+struct GroupClassifierTargets : public BaseBatch {
+  std::vector<float> y;         // [num_graphs, 3]
+  std::vector<float> y_energy;  // [num_graphs, 3]
   size_t num_graphs{0};
 };
 

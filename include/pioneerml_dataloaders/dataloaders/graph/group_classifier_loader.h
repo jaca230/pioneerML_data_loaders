@@ -4,7 +4,7 @@
 #include <string>
 
 #include "pioneerml_dataloaders/dataloaders/graph/graph_loader.h"
-#include "pioneerml_dataloaders/batch/graph_batch.h"
+#include "pioneerml_dataloaders/batch/group_classifier_batch.h"
 
 namespace pioneerml::dataloaders::graph {
 
@@ -20,7 +20,8 @@ class GroupClassifierLoader : public GraphLoader {
   std::shared_ptr<arrow::Table> LoadTable(const std::string& parquet_path) const override;
 
  protected:
-  std::unique_ptr<GraphBatch> BuildGraph(const arrow::Table& table) const override;
+  std::unique_ptr<BaseBatch> BuildGraph(const arrow::Table& table) const override;
+  TrainingBundle SplitInputsTargets(std::unique_ptr<BaseBatch> batch) const override;
 
  private:
   GroupClassifierConfig cfg_;

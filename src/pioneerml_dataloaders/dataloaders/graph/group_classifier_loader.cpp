@@ -3,6 +3,7 @@
 #include "pioneerml_dataloaders/data_derivers/time_grouper.h"
 #include "pioneerml_dataloaders/data_derivers/particle_mask_deriver.h"
 #include "pioneerml_dataloaders/io/reader_utils.h"
+#include "pioneerml_dataloaders/batch/group_classifier_batch.h"
 
 #include <arrow/api.h>
 
@@ -62,7 +63,7 @@ std::shared_ptr<arrow::Table> GroupClassifierLoader::LoadTable(const std::string
   return io::ReadParquet(parquet_path);
 }
 
-std::unique_ptr<GraphBatch> GroupClassifierLoader::BuildGraph(const arrow::Table& table) const {
+std::unique_ptr<BaseBatch> GroupClassifierLoader::BuildGraph(const arrow::Table& table) const {
   auto cols = BindColumns(std::shared_ptr<arrow::Table>(const_cast<arrow::Table*>(&table), [](arrow::Table*) {}));
   data_derivers::TimeGrouper grouper(cfg_.time_window_ns);
   data_derivers::ParticleMaskDeriver mask_deriver;
@@ -72,7 +73,7 @@ std::unique_ptr<GraphBatch> GroupClassifierLoader::BuildGraph(const arrow::Table
   const auto* time_groups_list = time_groups_array ? static_cast<const arrow::ListArray*>(time_groups_array.get()) : nullptr;
   const auto* masks_list = mask_array ? static_cast<const arrow::ListArray*>(mask_array.get()) : nullptr;
 
-  auto batch = std::make_unique<GraphBatch>();
+  auto batch = std::make_unique<GroupClassifierInputs>();
   batch->node_ptr.reserve(table.num_rows() + 1);
   batch->edge_ptr.reserve(table.num_rows() + 1);
   batch->node_ptr.push_back(0);
@@ -173,6 +174,26 @@ std::unique_ptr<GraphBatch> GroupClassifierLoader::BuildGraph(const arrow::Table
 
   batch->num_graphs = static_cast<size_t>(table.num_rows());
   return batch;
+}
+
+TrainingBundle GroupClassifierLoader::SplitInputsTargets(std::unique_ptr<BaseBatch> batch_base) const {
+  auto* typed = dynamic_cast<GroupClassifierInputs*>(batch_base.get());
+  if (!typed) {
+    throw std::runtime_error("Unexpected batch type in SplitInputsTargets");
+  }
+  auto targets = std::make_unique<GroupClassifierTargets>();
+  targets->num_graphs = typed->num_graphs;
+  targets->y = typed->y;
+  targets->y_energy = typed->y_energy;
+
+  // Clear labels from inputs to keep input-only batch.
+  typed->y.clear();
+  typed->y_energy.clear();
+
+  TrainingBundle result;
+  result.inputs = std::move(batch_base);
+  result.targets = std::move(targets);
+  return result;
 }
 
 }  // namespace pioneerml::dataloaders::graph

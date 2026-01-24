@@ -66,6 +66,7 @@ if command -v python &>/dev/null; then
         echo "Install with: pip install pybind11  (or add to your env setup) "
         exit 1
     fi
+    :
 else
     echo "[build.sh, ERROR] 'python' not found on PATH"
     exit 1
