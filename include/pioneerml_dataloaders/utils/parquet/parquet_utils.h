@@ -1,23 +1,17 @@
 #pragma once
 
 #include <arrow/api.h>
-#include <arrow/io/api.h>
-#include <parquet/arrow/reader.h>
 
 #include <memory>
-#include <string>
+#include <stdexcept>
+#include <utility>
 #include <vector>
 
-namespace pioneerml::io {
+namespace pioneerml::utils::parquet {
 
-class ParquetManager {
+class ParquetUtils {
  public:
-  static ParquetManager& Instance();
-
-  std::shared_ptr<arrow::Table> ReadParquet(const std::string& path) const;
-
-  std::pair<int64_t, int64_t> ListRange(const arrow::Array& list_arr,
-                                        int64_t idx) const;
+  std::pair<int64_t, int64_t> ListRange(const arrow::Array& list_arr, int64_t idx) const;
   int64_t ListLength(const arrow::Array& list_arr, int64_t idx) const;
   std::shared_ptr<arrow::Array> ListValues(const arrow::Array& list_arr) const;
 
@@ -42,11 +36,6 @@ class ParquetManager {
             *chunk);
     return typed.raw_values() + row;
   }
-
- private:
-  ParquetManager() = default;
-  ParquetManager(const ParquetManager&) = delete;
-  ParquetManager& operator=(const ParquetManager&) = delete;
 };
 
-}  // namespace pioneerml::io
+}  // namespace pioneerml::utils::parquet

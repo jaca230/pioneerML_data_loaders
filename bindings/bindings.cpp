@@ -19,4 +19,10 @@ PYBIND11_MODULE(pioneerml_dataloaders_python, m) {
 
   auto m_graph = m_dataloaders.def_submodule("graph");
   pioneerml::bindings::BindGroupClassifierLoader(m_graph);
+
+  auto m_utils = m.def_submodule("utils");
+  auto m_logging = m_utils.def_submodule("logging");
+  pioneerml::bindings::BindLogging(m_logging);
+  auto m_timing = m_utils.def_submodule("timing");
+  pioneerml::bindings::BindTiming(m_timing);
 }

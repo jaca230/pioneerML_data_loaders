@@ -8,8 +8,6 @@
 #include <arrow/result.h>
 #include <arrow/status.h>
 
-#include "pioneerml_dataloaders/io/parquet_manager.h"
-
 namespace pioneerml::data_derivers {
 
 void TimeGrouper::LoadConfig(const nlohmann::json& cfg) {

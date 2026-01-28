@@ -17,7 +17,4 @@ class ScopedTimer {
   bool enabled_{false};
 };
 
-bool TimingEnabled();
-void LogTimings();
-
 }  // namespace pioneerml::utils::timing

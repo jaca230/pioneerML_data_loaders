@@ -2,8 +2,9 @@
 
 #include "pioneerml_dataloaders/configurable/data_derivers/time_grouper.h"
 #include "pioneerml_dataloaders/configurable/data_derivers/group_summary_deriver.h"
-#include "pioneerml_dataloaders/io/parquet_manager.h"
+#include "pioneerml_dataloaders/io/parquet_reader.h"
 #include "pioneerml_dataloaders/batch/group_classifier_batch.h"
+#include "pioneerml_dataloaders/utils/parquet/parquet_utils.h"
 #include "pioneerml_dataloaders/utils/timing/scoped_timer.h"
 
 #include <arrow/api.h>
@@ -117,7 +118,8 @@ InferenceBundle GroupClassifierLoader::LoadInference(
 }
 
 std::shared_ptr<arrow::Table> GroupClassifierLoader::LoadTable(const std::string& parquet_path) const {
-  return io::ParquetManager::Instance().ReadParquet(parquet_path);
+  io::ParquetReader reader;
+  return reader.ReadTable(parquet_path);
 }
 
 std::unique_ptr<BaseBatch> GroupClassifierLoader::BuildGraph(const arrow::Table& table) const {
@@ -130,7 +132,7 @@ std::unique_ptr<BaseBatch> GroupClassifierLoader::BuildGraph(const arrow::Table&
 
   const bool has_targets = target_cols.size() == target_columns_.size();
   const auto& time_groups_col = *input_cols.at("hits_time_group")->chunk(0);
-  auto& parquet = io::ParquetManager::Instance();
+  utils::parquet::ParquetUtils parquet_utils;
 
   const auto& hits_x = *input_cols.at("hits_x")->chunk(0);
   const auto& hits_y = *input_cols.at("hits_y")->chunk(0);
@@ -145,7 +147,7 @@ std::unique_ptr<BaseBatch> GroupClassifierLoader::BuildGraph(const arrow::Table&
   {
     utils::timing::ScopedTimer count_timer("group_classifier.count_nodes_edges");
     for (int64_t row = 0; row < table.num_rows(); ++row) {
-      int64_t n = parquet.ListLength(hits_z, row);
+      int64_t n = parquet_utils.ListLength(hits_z, row);
       total_nodes += n;
       total_edges += n * (n - 1);
     }
@@ -183,78 +185,79 @@ std::unique_ptr<BaseBatch> GroupClassifierLoader::BuildGraph(const arrow::Table&
   {
     utils::timing::ScopedTimer build_timer("group_classifier.build_rows");
     for (int64_t row = 0; row < table.num_rows(); ++row) {
-    auto xs = parquet.ListToVector<arrow::DoubleType, double>(hits_x, row);
-    auto ys = parquet.ListToVector<arrow::DoubleType, double>(hits_y, row);
-    auto zs = parquet.ListToVector<arrow::DoubleType, double>(hits_z, row);
-    auto edeps = parquet.ListToVector<arrow::DoubleType, double>(hits_edep, row);
-    auto views = parquet.ListToVector<arrow::Int32Type, int64_t>(hits_view, row);
-    auto pdgs = parquet.ListToVector<arrow::Int32Type, int64_t>(hits_pdg, row);
-    size_t n = zs.size();
-    std::vector<int64_t> time_groups;
-    if (compute_time_groups_) {
-      auto values = std::static_pointer_cast<arrow::NumericArray<arrow::Int64Type>>(parquet.ListValues(time_groups_col));
-      const int64_t* raw = values->raw_values();
-      auto range = parquet.ListRange(time_groups_col, row);
-      for (int64_t i = range.first; i < range.second; ++i) {
-        time_groups.push_back(raw[i]);
+      auto xs = parquet_utils.ListToVector<arrow::DoubleType, double>(hits_x, row);
+      auto ys = parquet_utils.ListToVector<arrow::DoubleType, double>(hits_y, row);
+      auto zs = parquet_utils.ListToVector<arrow::DoubleType, double>(hits_z, row);
+      auto edeps = parquet_utils.ListToVector<arrow::DoubleType, double>(hits_edep, row);
+      auto views = parquet_utils.ListToVector<arrow::Int32Type, int64_t>(hits_view, row);
+      auto pdgs = parquet_utils.ListToVector<arrow::Int32Type, int64_t>(hits_pdg, row);
+      size_t n = zs.size();
+      std::vector<int64_t> time_groups;
+      if (compute_time_groups_) {
+        auto values = std::static_pointer_cast<arrow::NumericArray<arrow::Int64Type>>(
+            parquet_utils.ListValues(time_groups_col));
+        const int64_t* raw = values->raw_values();
+        auto range = parquet_utils.ListRange(time_groups_col, row);
+        for (int64_t i = range.first; i < range.second; ++i) {
+          time_groups.push_back(raw[i]);
+        }
+      } else {
+        time_groups.assign(n, 0);
       }
-    } else {
-      time_groups.assign(n, 0);
-    }
 
-    int64_t node_start = node_count;
+      int64_t node_start = node_count;
 
-    for (size_t i = 0; i < n; ++i) {
-      double coord = (views[i] == 0 ? xs[i] : ys[i]);
-      ensure_ok(node_feat_builder.Append(static_cast<float>(coord)));
-      ensure_ok(node_feat_builder.Append(static_cast<float>(zs[i])));
-      ensure_ok(node_feat_builder.Append(static_cast<float>(edeps[i])));
-      ensure_ok(node_feat_builder.Append(static_cast<float>(views[i])));
-      ensure_ok(time_group_builder.Append(i < time_groups.size() ? time_groups[i] : 0));
-    }
-
-    for (int64_t i = 0; i < static_cast<int64_t>(n); ++i) {
-      for (int64_t j = 0; j < static_cast<int64_t>(n); ++j) {
-        if (i == j) continue;
-        ensure_ok(edge_index_builder.Append(node_start + i));
-        ensure_ok(edge_index_builder.Append(node_start + j));
-        double coord_i = (views[i] == 0 ? xs[i] : ys[i]);
-        double coord_j = (views[j] == 0 ? xs[j] : ys[j]);
-        double dx = coord_j - coord_i;
-        double dz = zs[j] - zs[i];
-        double dE = edeps[j] - edeps[i];
-        double same_view = (views[i] == views[j]) ? 1.0 : 0.0;
-        ensure_ok(edge_attr_builder.Append(static_cast<float>(dx)));
-        ensure_ok(edge_attr_builder.Append(static_cast<float>(dz)));
-        ensure_ok(edge_attr_builder.Append(static_cast<float>(dE)));
-        ensure_ok(edge_attr_builder.Append(static_cast<float>(same_view)));
-        edge_count++;
+      for (size_t i = 0; i < n; ++i) {
+        double coord = (views[i] == 0 ? xs[i] : ys[i]);
+        ensure_ok(node_feat_builder.Append(static_cast<float>(coord)));
+        ensure_ok(node_feat_builder.Append(static_cast<float>(zs[i])));
+        ensure_ok(node_feat_builder.Append(static_cast<float>(edeps[i])));
+        ensure_ok(node_feat_builder.Append(static_cast<float>(views[i])));
+        ensure_ok(time_group_builder.Append(i < time_groups.size() ? time_groups[i] : 0));
       }
-    }
 
-    node_count += static_cast<int64_t>(n);
-    ensure_ok(node_ptr_builder.Append(node_count));
-    ensure_ok(edge_ptr_builder.Append(edge_count));
+      for (int64_t i = 0; i < static_cast<int64_t>(n); ++i) {
+        for (int64_t j = 0; j < static_cast<int64_t>(n); ++j) {
+          if (i == j) continue;
+          ensure_ok(edge_index_builder.Append(node_start + i));
+          ensure_ok(edge_index_builder.Append(node_start + j));
+          double coord_i = (views[i] == 0 ? xs[i] : ys[i]);
+          double coord_j = (views[j] == 0 ? xs[j] : ys[j]);
+          double dx = coord_j - coord_i;
+          double dz = zs[j] - zs[i];
+          double dE = edeps[j] - edeps[i];
+          double same_view = (views[i] == views[j]) ? 1.0 : 0.0;
+          ensure_ok(edge_attr_builder.Append(static_cast<float>(dx)));
+          ensure_ok(edge_attr_builder.Append(static_cast<float>(dz)));
+          ensure_ok(edge_attr_builder.Append(static_cast<float>(dE)));
+          ensure_ok(edge_attr_builder.Append(static_cast<float>(same_view)));
+          edge_count++;
+        }
+      }
 
-    if (has_targets) {
-      int64_t pion = *parquet.GetScalarPtr<int32_t>(*target_cols.at("pion_in_group"), row);
-      int64_t muon = *parquet.GetScalarPtr<int32_t>(*target_cols.at("muon_in_group"), row);
-      int64_t mip = *parquet.GetScalarPtr<int32_t>(*target_cols.at("mip_in_group"), row);
-      ensure_ok(y_builder.Append(static_cast<float>(pion)));
-      ensure_ok(y_builder.Append(static_cast<float>(muon)));
-      ensure_ok(y_builder.Append(static_cast<float>(mip)));
+      node_count += static_cast<int64_t>(n);
+      ensure_ok(node_ptr_builder.Append(node_count));
+      ensure_ok(edge_ptr_builder.Append(edge_count));
 
-      double e_pi = *parquet.GetScalarPtr<double>(*target_cols.at("total_pion_energy"), row);
-      double e_mu = *parquet.GetScalarPtr<double>(*target_cols.at("total_muon_energy"), row);
-      double e_mip = *parquet.GetScalarPtr<double>(*target_cols.at("total_mip_energy"), row);
-      ensure_ok(y_energy_builder.Append(static_cast<float>(e_pi)));
-      ensure_ok(y_energy_builder.Append(static_cast<float>(e_mu)));
-      ensure_ok(y_energy_builder.Append(static_cast<float>(e_mip)));
-    }
+      if (has_targets) {
+        int64_t pion = *parquet_utils.GetScalarPtr<int32_t>(*target_cols.at("pion_in_group"), row);
+        int64_t muon = *parquet_utils.GetScalarPtr<int32_t>(*target_cols.at("muon_in_group"), row);
+        int64_t mip = *parquet_utils.GetScalarPtr<int32_t>(*target_cols.at("mip_in_group"), row);
+        ensure_ok(y_builder.Append(static_cast<float>(pion)));
+        ensure_ok(y_builder.Append(static_cast<float>(muon)));
+        ensure_ok(y_builder.Append(static_cast<float>(mip)));
 
-    double u = 0.0;
-    for (size_t i = 0; i < n; ++i) u += edeps[i];
-    ensure_ok(u_builder.Append(static_cast<float>(u)));
+        double e_pi = *parquet_utils.GetScalarPtr<double>(*target_cols.at("total_pion_energy"), row);
+        double e_mu = *parquet_utils.GetScalarPtr<double>(*target_cols.at("total_muon_energy"), row);
+        double e_mip = *parquet_utils.GetScalarPtr<double>(*target_cols.at("total_mip_energy"), row);
+        ensure_ok(y_energy_builder.Append(static_cast<float>(e_pi)));
+        ensure_ok(y_energy_builder.Append(static_cast<float>(e_mu)));
+        ensure_ok(y_energy_builder.Append(static_cast<float>(e_mip)));
+      }
+
+      double u = 0.0;
+      for (size_t i = 0; i < n; ++i) u += edeps[i];
+      ensure_ok(u_builder.Append(static_cast<float>(u)));
     }
   }
 

@@ -8,6 +8,8 @@ pybind11_add_module(
     batch/group_classifier_targets_bindings.cpp
     configurable/dataloaders/base_loader_bindings.cpp
     configurable/dataloaders/graph/group_classifier_loader_bindings.cpp
+    utils/logging_bindings.cpp
+    utils/timing_bindings.cpp
 )
 target_link_libraries(pioneerml_dataloaders_python PRIVATE pioneerml_dataloaders)
 target_include_directories(
