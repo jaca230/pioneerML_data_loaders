@@ -13,6 +13,8 @@ find_package(Arrow CONFIG REQUIRED)
 find_package(Parquet CONFIG REQUIRED)
 set(PYBIND11_FINDPYTHON ON)
 find_package(pybind11 CONFIG REQUIRED)
+find_package(spdlog CONFIG REQUIRED)
+find_package(nlohmann_json CONFIG REQUIRED)
 
 file(GLOB_RECURSE PIONEERML_DATALOADERS_SRC CONFIGURE_DEPENDS
     ${CMAKE_CURRENT_SOURCE_DIR}/src/pioneerml_dataloaders/**/*.cpp)
@@ -27,7 +29,9 @@ target_include_directories(${PROJECT_NAME}
 target_link_libraries(${PROJECT_NAME}
     PUBLIC
         Arrow::arrow_shared
-        Parquet::parquet_shared)
+        Parquet::parquet_shared
+        spdlog::spdlog_header_only
+        nlohmann_json::nlohmann_json)
 
 set_target_properties(${PROJECT_NAME} PROPERTIES OUTPUT_NAME "pioneerml_dataloaders")
 

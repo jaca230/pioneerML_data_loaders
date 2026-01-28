@@ -55,6 +55,18 @@ if [ "$OVERWRITE" = true ]; then
 fi
 
 mkdir -p "$BUILD_DIR"
+
+if [ -f "$BUILD_DIR/CMakeCache.txt" ]; then
+    CMAKE_HOME_DIR=$(grep -E "^CMAKE_HOME_DIRECTORY:PATH=" "$BUILD_DIR/CMakeCache.txt" | cut -d= -f2- || true)
+    if [ -n "$CMAKE_HOME_DIR" ] && [ "$CMAKE_HOME_DIR" != "$BASE_DIR" ]; then
+        echo "[build.sh] CMake cache source mismatch:"
+        echo "  cached: $CMAKE_HOME_DIR"
+        echo "  current: $BASE_DIR"
+        echo "[build.sh] Removing stale build directory."
+        rm -rf "$BUILD_DIR"
+        mkdir -p "$BUILD_DIR"
+    fi
+fi
 cd "$BUILD_DIR"
 
 PYBIND11_CMAKE_DIR=""

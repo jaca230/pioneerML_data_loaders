@@ -15,10 +15,8 @@ PYBIND11_MODULE(pioneerml_dataloaders_python, m) {
   pioneerml::bindings::BindGroupClassifierTargets(m_batch);
 
   auto m_dataloaders = m.def_submodule("dataloaders");
-  pioneerml::bindings::BindTrainingBundle(m_dataloaders);
-  pioneerml::bindings::BindInferenceBundle(m_dataloaders);
+  pioneerml::bindings::BindBaseLoader(m_dataloaders);
 
   auto m_graph = m_dataloaders.def_submodule("graph");
-  pioneerml::bindings::BindGroupClassifierConfig(m_graph);
   pioneerml::bindings::BindGroupClassifierLoader(m_graph);
 }
