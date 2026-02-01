@@ -19,9 +19,9 @@ void BindGroupClassifierTargets(py::module_& m) {
                              [](const pioneerml::GroupClassifierTargets& self) {
                                return WrapArray(self.y_energy);
                              })
-      .def_property_readonly("num_graphs",
+      .def_property_readonly("num_groups",
                              [](const pioneerml::GroupClassifierTargets& self) {
-                               return self.num_graphs;
+                               return self.num_groups;
                              });
 }
 

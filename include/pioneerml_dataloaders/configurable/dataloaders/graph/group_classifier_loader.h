@@ -33,7 +33,6 @@ class GroupClassifierLoader : public GraphLoader {
   void ConfigureDerivers(const nlohmann::json* derivers_cfg);
 
   double time_window_ns_{1.0};
-  bool compute_time_groups_{true};
 };
 
 }  // namespace pioneerml::dataloaders::graph

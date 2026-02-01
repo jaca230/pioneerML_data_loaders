@@ -4,6 +4,8 @@
 #include <arrow/result.h>
 #include <arrow/status.h>
 
+#include "pioneerml_dataloaders/utils/parallel/parallel.h"
+
 namespace pioneerml::data_derivers {
 
 void ParticleMaskDeriver::LoadConfig(const nlohmann::json& cfg) {
@@ -12,9 +14,12 @@ void ParticleMaskDeriver::LoadConfig(const nlohmann::json& cfg) {
   }
 }
 
-std::shared_ptr<arrow::Array> ParticleMaskDeriver::DeriveColumn(const arrow::Table& table) const {
+std::vector<std::shared_ptr<arrow::Array>> ParticleMaskDeriver::DeriveColumns(
+    const arrow::Table& table) const {
   auto col = table.GetColumnByName(pdg_column_);
-  if (!col) return std::make_shared<arrow::NullArray>(table.num_rows());
+  if (!col) {
+    return {std::make_shared<arrow::NullArray>(table.num_rows())};
+  }
   const auto& list = static_cast<const arrow::ListArray&>(*col->chunk(0));
 
   arrow::ListBuilder list_builder(arrow::default_memory_pool(), std::make_shared<arrow::Int64Builder>(arrow::default_memory_pool()));
@@ -25,15 +30,25 @@ std::shared_ptr<arrow::Array> ParticleMaskDeriver::DeriveColumn(const arrow::Tab
   auto values = std::static_pointer_cast<arrow::NumericArray<arrow::Int32Type>>(list.values());
   const int32_t* raw = values->raw_values();
 
-  for (int64_t row = 0; row < rows; ++row) {
+  std::vector<std::vector<int64_t>> masks(rows);
+  utils::parallel::Parallel::For(0, rows, [&](int64_t row) {
     auto start = offsets[row];
     auto end = offsets[row + 1];
+    std::vector<int64_t> row_masks;
+    row_masks.reserve(end - start);
+    for (int32_t i = start; i < end; ++i) {
+      row_masks.push_back(ComputeSingle(raw[i]));
+    }
+    masks[row] = std::move(row_masks);
+  });
+
+  for (int64_t row = 0; row < rows; ++row) {
     auto st = list_builder.Append();
     if (!st.ok()) {
       throw std::runtime_error(st.ToString());
     }
-    for (int32_t i = start; i < end; ++i) {
-      st = int_builder->Append(ComputeSingle(raw[i]));
+    for (auto mask : masks[row]) {
+      st = int_builder->Append(mask);
       if (!st.ok()) {
         throw std::runtime_error(st.ToString());
       }
@@ -45,7 +60,7 @@ std::shared_ptr<arrow::Array> ParticleMaskDeriver::DeriveColumn(const arrow::Tab
   if (!st_finish.ok()) {
     throw std::runtime_error(st_finish.ToString());
   }
-  return out;
+  return {std::move(out)};
 }
 
 int64_t ParticleMaskDeriver::ComputeSingle(int pdg_id) const {

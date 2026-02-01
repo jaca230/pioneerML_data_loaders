@@ -32,12 +32,13 @@ int ClassIndex(int pdg) {
 
 }  // namespace
 
-std::shared_ptr<arrow::Array> TimeGroupEnergyDeriver::DeriveColumn(const arrow::Table& table) const {
+std::vector<std::shared_ptr<arrow::Array>> TimeGroupEnergyDeriver::DeriveColumns(
+    const arrow::Table& table) const {
   auto pdg_col = table.GetColumnByName(pdg_column_);
   auto edep_col = table.GetColumnByName(edep_column_);
   auto tg_col = table.GetColumnByName(time_group_column_);
   if (!pdg_col || !edep_col || !tg_col) {
-    return std::make_shared<arrow::NullArray>(table.num_rows());
+    return {std::make_shared<arrow::NullArray>(table.num_rows())};
   }
 
   const auto& pdg_list = static_cast<const arrow::ListArray&>(*pdg_col->chunk(0));
@@ -122,7 +123,7 @@ std::shared_ptr<arrow::Array> TimeGroupEnergyDeriver::DeriveColumn(const arrow::
   std::shared_ptr<arrow::Array> out;
   auto st_finish = struct_builder.Finish(&out);
   if (!st_finish.ok()) throw std::runtime_error(st_finish.ToString());
-  return out;
+  return {std::move(out)};
 }
 
 }  // namespace pioneerml::data_derivers

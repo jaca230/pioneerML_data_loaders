@@ -8,15 +8,16 @@
 
 namespace pioneerml::data_derivers {
 
-class GroupSummaryDeriver : public BaseDeriver, public MultiDeriver {
+class GroupSummaryDeriver : public BaseDeriver {
  public:
   explicit GroupSummaryDeriver(std::string pdg_column = "hits_pdg_id",
-                               std::string edep_column = "hits_edep")
-      : pdg_column_(std::move(pdg_column)), edep_column_(std::move(edep_column)) {}
+                               std::string edep_column = "hits_edep",
+                               std::string time_group_column = "hits_time_group")
+      : pdg_column_(std::move(pdg_column)),
+        edep_column_(std::move(edep_column)),
+        time_group_column_(std::move(time_group_column)) {}
 
   void LoadConfig(const nlohmann::json& cfg) override;
-
-  std::shared_ptr<arrow::Array> DeriveColumn(const arrow::Table& table) const override;
 
   std::vector<std::shared_ptr<arrow::Array>> DeriveColumns(
       const arrow::Table& table) const override;
@@ -24,6 +25,7 @@ class GroupSummaryDeriver : public BaseDeriver, public MultiDeriver {
  private:
   std::string pdg_column_;
   std::string edep_column_;
+  std::string time_group_column_;
 };
 
 }  // namespace pioneerml::data_derivers

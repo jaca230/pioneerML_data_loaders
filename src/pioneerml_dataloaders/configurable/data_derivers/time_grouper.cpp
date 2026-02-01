@@ -8,6 +8,8 @@
 #include <arrow/result.h>
 #include <arrow/status.h>
 
+#include "pioneerml_dataloaders/utils/parallel/parallel.h"
+
 namespace pioneerml::data_derivers {
 
 void TimeGrouper::LoadConfig(const nlohmann::json& cfg) {
@@ -19,9 +21,12 @@ void TimeGrouper::LoadConfig(const nlohmann::json& cfg) {
   }
 }
 
-std::shared_ptr<arrow::Array> TimeGrouper::DeriveColumn(const arrow::Table& table) const {
+std::vector<std::shared_ptr<arrow::Array>> TimeGrouper::DeriveColumns(
+    const arrow::Table& table) const {
   auto col = table.GetColumnByName(time_column_);
-  if (!col) return std::make_shared<arrow::NullArray>(table.num_rows());
+  if (!col) {
+    return {std::make_shared<arrow::NullArray>(table.num_rows())};
+  }
   const auto& list = static_cast<const arrow::ListArray&>(*col->chunk(0));
 
   arrow::ListBuilder list_builder(arrow::default_memory_pool(), std::make_shared<arrow::Int64Builder>(arrow::default_memory_pool()));
@@ -32,20 +37,24 @@ std::shared_ptr<arrow::Array> TimeGrouper::DeriveColumn(const arrow::Table& tabl
   auto values = std::static_pointer_cast<arrow::NumericArray<arrow::DoubleType>>(list.values());
   const double* raw = values->raw_values();
 
-  for (int64_t row = 0; row < rows; ++row) {
+  std::vector<std::vector<int64_t>> derived(rows);
+  utils::parallel::Parallel::For(0, rows, [&](int64_t row) {
     auto start = offsets[row];
     auto end = offsets[row + 1];
-    auto st = list_builder.Append();
-    if (!st.ok()) {
-      throw std::runtime_error(st.ToString());
-    }
     std::vector<double> times;
     times.reserve(end - start);
     for (int32_t i = start; i < end; ++i) {
       times.push_back(raw[i]);
     }
-    auto groups = Compute(times);
-    for (auto g : groups) {
+    derived[row] = Compute(times);
+  });
+
+  for (int64_t row = 0; row < rows; ++row) {
+    auto st = list_builder.Append();
+    if (!st.ok()) {
+      throw std::runtime_error(st.ToString());
+    }
+    for (auto g : derived[row]) {
       st = int_builder->Append(g);
       if (!st.ok()) {
         throw std::runtime_error(st.ToString());
@@ -58,7 +67,7 @@ std::shared_ptr<arrow::Array> TimeGrouper::DeriveColumn(const arrow::Table& tabl
   if (!st_finish.ok()) {
     throw std::runtime_error(st_finish.ToString());
   }
-  return out;
+  return {std::move(out)};
 }
 
 std::vector<int64_t> TimeGrouper::Compute(const std::vector<double>& times) const {

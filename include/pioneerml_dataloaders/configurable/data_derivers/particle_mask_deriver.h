@@ -24,7 +24,8 @@ class ParticleMaskDeriver : public BaseDeriver {
 
   void LoadConfig(const nlohmann::json& cfg) override;
 
-  std::shared_ptr<arrow::Array> DeriveColumn(const arrow::Table& table) const override;
+  std::vector<std::shared_ptr<arrow::Array>> DeriveColumns(
+      const arrow::Table& table) const override;
   int64_t ComputeSingle(int pdg_id) const;
 
  private:

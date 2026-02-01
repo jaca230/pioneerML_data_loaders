@@ -5,6 +5,7 @@
 
 #include <arrow/table.h>
 
+#include "pioneerml_dataloaders/utils/parallel/parallel.h"
 #include "pioneerml_dataloaders/utils/timing/scoped_timer.h"
 namespace pioneerml::dataloaders {
 
@@ -31,32 +32,21 @@ InferenceBundle DataLoader::LoadInference(
 std::shared_ptr<arrow::Table> DataLoader::AddDerivedColumns(
     const std::shared_ptr<arrow::Table>& table) const {
   auto current = table;
-  for (const auto& spec : derivers_) {
+  for (size_t i = 0; i < derivers_.size(); ++i) {
+    const auto& spec = derivers_[i];
     if (!spec.deriver) {
       continue;
     }
-    std::vector<std::shared_ptr<arrow::Array>> arrays;
-    if (spec.names.size() == 1U) {
-      auto array = spec.deriver->DeriveColumn(*current);
-      if (!array) {
-        continue;
-      }
-      arrays.push_back(std::move(array));
-    } else {
-      auto* multi = dynamic_cast<data_derivers::MultiDeriver*>(spec.deriver.get());
-      if (!multi) {
-        throw std::runtime_error("Deriver does not support multiple outputs.");
-      }
-      arrays = multi->DeriveColumns(*current);
+    auto arrays = spec.deriver->DeriveColumns(*current);
+    if (arrays.empty()) {
+      continue;
     }
-
     if (arrays.size() != spec.names.size()) {
       throw std::runtime_error("Derived column count does not match output names.");
     }
-
-    for (size_t i = 0; i < spec.names.size(); ++i) {
-      const auto& name = spec.names[i];
-      const auto& array = arrays[i];
+    for (size_t j = 0; j < spec.names.size(); ++j) {
+      const auto& name = spec.names[j];
+      const auto& array = arrays[j];
       if (!array) {
         continue;
       }
@@ -81,6 +71,7 @@ std::shared_ptr<arrow::Table> DataLoader::AddDerivedColumns(
       }
     }
   }
+
   return current;
 }
 
@@ -91,17 +82,31 @@ std::shared_ptr<arrow::Table> DataLoader::LoadAndConcatenateTables(
   if (parquet_paths.empty()) {
     throw std::runtime_error("No parquet paths provided.");
   }
-  std::vector<std::shared_ptr<arrow::Table>> tables;
-  tables.reserve(parquet_paths.size());
-  for (const auto& path : parquet_paths) {
-    utils::timing::ScopedTimer read_timer("loader.read_table");
-    auto table = LoadTable(path);
-    if (add_derived) {
-      utils::timing::ScopedTimer derive_timer("loader.add_derived");
-      table = AddDerivedColumns(table);
+  std::vector<std::shared_ptr<arrow::Table>> tables(parquet_paths.size());
+  std::vector<std::exception_ptr> errors(parquet_paths.size());
+
+  utils::parallel::Parallel::For(0, static_cast<int64_t>(parquet_paths.size()),
+                                 [&](int64_t idx) {
+    const auto& path = parquet_paths[static_cast<size_t>(idx)];
+    try {
+      utils::timing::ScopedTimer read_timer("loader.read_table");
+      auto table = LoadTable(path);
+      if (add_derived) {
+        utils::timing::ScopedTimer derive_timer("loader.add_derived");
+        table = AddDerivedColumns(table);
+      }
+      tables[static_cast<size_t>(idx)] = std::move(table);
+    } catch (...) {
+      errors[static_cast<size_t>(idx)] = std::current_exception();
     }
-    tables.push_back(std::move(table));
+  });
+
+  for (const auto& err : errors) {
+    if (err) {
+      std::rethrow_exception(err);
+    }
   }
+
   utils::timing::ScopedTimer concat_timer("loader.concat_tables");
   auto result = arrow::ConcatenateTables(tables);
   if (!result.ok()) {

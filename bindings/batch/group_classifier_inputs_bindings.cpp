@@ -39,6 +39,10 @@ void BindGroupClassifierInputs(py::module_& m) {
                              [](const pioneerml::GroupClassifierInputs& self) {
                                return WrapArray(self.edge_ptr);
                              })
+      .def_property_readonly("group_ptr",
+                             [](const pioneerml::GroupClassifierInputs& self) {
+                               return WrapArray(self.group_ptr);
+                             })
       .def_property_readonly("y",
                              [](const pioneerml::GroupClassifierInputs& self) {
                                return WrapArray(self.y);
@@ -50,6 +54,10 @@ void BindGroupClassifierInputs(py::module_& m) {
       .def_property_readonly("num_graphs",
                              [](const pioneerml::GroupClassifierInputs& self) {
                                return self.num_graphs;
+                             })
+      .def_property_readonly("num_groups",
+                             [](const pioneerml::GroupClassifierInputs& self) {
+                               return self.num_groups;
                              });
 }
 

@@ -21,7 +21,8 @@ class TimeGroupEnergyDeriver : public BaseDeriver {
 
   void LoadConfig(const nlohmann::json& cfg) override;
 
-  std::shared_ptr<arrow::Array> DeriveColumn(const arrow::Table& table) const override;
+  std::vector<std::shared_ptr<arrow::Array>> DeriveColumns(
+      const arrow::Table& table) const override;
 
  private:
   std::string pdg_column_;
