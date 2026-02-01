@@ -34,8 +34,29 @@ std::vector<std::shared_ptr<arrow::Array>> TimeGrouper::DeriveColumns(
 
   int64_t rows = table.num_rows();
   auto offsets = list.raw_value_offsets();
-  auto values = std::static_pointer_cast<arrow::NumericArray<arrow::DoubleType>>(list.values());
-  const double* raw = values->raw_values();
+  const auto& values_arr = list.values();
+  const double* raw = nullptr;
+  std::vector<double> converted;
+
+  switch (values_arr->type_id()) {
+    case arrow::Type::DOUBLE: {
+      auto values = std::static_pointer_cast<arrow::NumericArray<arrow::DoubleType>>(values_arr);
+      raw = values->raw_values();
+      break;
+    }
+    case arrow::Type::FLOAT: {
+      auto values = std::static_pointer_cast<arrow::NumericArray<arrow::FloatType>>(values_arr);
+      converted.assign(values->length(), 0.0);
+      const float* raw_f = values->raw_values();
+      for (int64_t i = 0; i < values->length(); ++i) {
+        converted[static_cast<size_t>(i)] = static_cast<double>(raw_f[i]);
+      }
+      raw = converted.data();
+      break;
+    }
+    default:
+      throw std::runtime_error("TimeGrouper expects hits_time to be float or double.");
+  }
 
   std::vector<std::vector<int64_t>> derived(rows);
   utils::parallel::Parallel::For(0, rows, [&](int64_t row) {

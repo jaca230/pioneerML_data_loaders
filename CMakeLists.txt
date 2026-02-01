@@ -11,8 +11,6 @@ set(CMAKE_EXPORT_COMPILE_COMMANDS ON)
 # Arrow/Parquet
 find_package(Arrow CONFIG REQUIRED)
 find_package(Parquet CONFIG REQUIRED)
-set(PYBIND11_FINDPYTHON ON)
-find_package(pybind11 CONFIG REQUIRED)
 find_package(spdlog CONFIG REQUIRED)
 find_package(nlohmann_json CONFIG REQUIRED)
 find_package(TBB REQUIRED)
@@ -44,4 +42,9 @@ install(TARGETS ${PROJECT_NAME}
 
 install(DIRECTORY include/ DESTINATION include)
 
-add_subdirectory(bindings)
+option(PIONEERML_DATALOADERS_BUILD_BINDINGS "Build pybind11 bindings" ON)
+if(PIONEERML_DATALOADERS_BUILD_BINDINGS)
+    set(PYBIND11_FINDPYTHON ON)
+    find_package(pybind11 CONFIG REQUIRED)
+    add_subdirectory(bindings)
+endif()
