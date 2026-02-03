@@ -8,8 +8,11 @@ pybind11_add_module(
     batch/group_classifier_targets_bindings.cpp
     configurable/dataloaders/base_loader_bindings.cpp
     configurable/dataloaders/graph/group_classifier_loader_bindings.cpp
+    configurable/dataloaders/graph/group_classifier_event_loader_bindings.cpp
     configurable/input_adapters/graph/group_classifier_input_adapter_bindings.cpp
+    configurable/input_adapters/graph/group_classifier_event_input_adapter_bindings.cpp
     configurable/output_adapters/graph/group_classifier_output_adapter_bindings.cpp
+    configurable/output_adapters/graph/group_classifier_event_output_adapter_bindings.cpp
     utils/logging_bindings.cpp
     utils/timing_bindings.cpp
 )

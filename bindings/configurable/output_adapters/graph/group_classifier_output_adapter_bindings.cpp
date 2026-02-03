@@ -18,19 +18,19 @@ void BindGroupClassifierOutputAdapter(py::module_& m) {
              const std::string& output_path,
              py::handle pred,
              py::handle pred_energy,
-             py::handle node_ptr,
-             py::handle time_group_ids) {
+             py::handle graph_event_ids,
+             py::handle graph_group_ids) {
             auto pred_arr = ImportArray(pred);
             auto energy_arr = pred_energy.is_none() ? nullptr : ImportArray(pred_energy);
-            auto node_ptr_arr = ImportArray(node_ptr);
-            auto tg_arr = ImportArray(time_group_ids);
-            adapter.WriteParquet(output_path, pred_arr, energy_arr, node_ptr_arr, tg_arr);
+            auto event_arr = ImportArray(graph_event_ids);
+            auto group_arr = ImportArray(graph_group_ids);
+            adapter.WriteParquet(output_path, pred_arr, energy_arr, event_arr, group_arr);
           },
           py::arg("output_path"),
           py::arg("predictions"),
           py::arg("predictions_energy") = py::none(),
-          py::arg("node_ptr"),
-          py::arg("time_group_ids"));
+          py::arg("graph_event_ids"),
+          py::arg("graph_group_ids"));
 }
 
 }  // namespace pioneerml::bindings

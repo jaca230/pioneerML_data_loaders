@@ -1,4 +1,4 @@
-#include "pioneerml_dataloaders/configurable/dataloaders/graph/group_classifier_loader.h"
+#include "pioneerml_dataloaders/configurable/dataloaders/graph/group_classifier_event_loader.h"
 
 #include "pioneerml_dataloaders/configurable/data_derivers/time_grouper.h"
 #include "pioneerml_dataloaders/configurable/data_derivers/group_summary_deriver.h"
@@ -21,10 +21,7 @@
 
 namespace pioneerml::dataloaders::graph {
 
-namespace {
-}  // namespace
-
-GroupClassifierLoader::GroupClassifierLoader() {
+GroupClassifierEventLoader::GroupClassifierEventLoader() {
   input_columns_ = {
       "hits_x",
       "hits_y",
@@ -46,7 +43,7 @@ GroupClassifierLoader::GroupClassifierLoader() {
   ConfigureDerivers(nullptr);
 }
 
-void GroupClassifierLoader::LoadConfig(const nlohmann::json& cfg) {
+void GroupClassifierEventLoader::LoadConfig(const nlohmann::json& cfg) {
   if (cfg.contains("time_window_ns")) {
     time_window_ns_ = cfg.at("time_window_ns").get<double>();
   }
@@ -58,7 +55,7 @@ void GroupClassifierLoader::LoadConfig(const nlohmann::json& cfg) {
   ConfigureDerivers(derivers_cfg);
 }
 
-void GroupClassifierLoader::ConfigureDerivers(const nlohmann::json* derivers_cfg) {
+void GroupClassifierEventLoader::ConfigureDerivers(const nlohmann::json* derivers_cfg) {
   derivers_.clear();
 
   auto time_grouper = std::make_shared<data_derivers::TimeGrouper>(time_window_ns_);
@@ -81,49 +78,49 @@ void GroupClassifierLoader::ConfigureDerivers(const nlohmann::json* derivers_cfg
       group_summary);
 }
 
-TrainingBundle GroupClassifierLoader::LoadTraining(const std::string& parquet_path) const {
+TrainingBundle GroupClassifierEventLoader::LoadTraining(const std::string& parquet_path) const {
   auto table = AddDerivedColumns(LoadTable(parquet_path));
   auto required = MergeColumns(input_columns_, target_columns_);
-  ValidateColumns(*table, required, {}, true, "GroupClassifierLoader training");
+  ValidateColumns(*table, required, {}, true, "GroupClassifierEventLoader training");
   auto batch = BuildGraph(*table);
   return SplitInputsTargets(std::move(batch));
 }
 
-TrainingBundle GroupClassifierLoader::LoadTraining(
+TrainingBundle GroupClassifierEventLoader::LoadTraining(
     const std::vector<std::string>& parquet_paths) const {
   auto table = LoadAndConcatenateTables(parquet_paths, true);
   auto required = MergeColumns(input_columns_, target_columns_);
-  ValidateColumns(*table, required, {}, true, "GroupClassifierLoader training");
+  ValidateColumns(*table, required, {}, true, "GroupClassifierEventLoader training");
   auto batch = BuildGraph(*table);
   return SplitInputsTargets(std::move(batch));
 }
 
-InferenceBundle GroupClassifierLoader::LoadInference(const std::string& parquet_path) const {
+InferenceBundle GroupClassifierEventLoader::LoadInference(const std::string& parquet_path) const {
   auto table = AddDerivedColumns(LoadTable(parquet_path));
-  ValidateColumns(*table, input_columns_, target_columns_, true, "GroupClassifierLoader inputs");
+  ValidateColumns(*table, input_columns_, target_columns_, true, "GroupClassifierEventLoader inputs");
   InferenceBundle out;
   out.inputs = BuildGraph(*table);
   return out;
 }
 
-InferenceBundle GroupClassifierLoader::LoadInference(
+InferenceBundle GroupClassifierEventLoader::LoadInference(
     const std::vector<std::string>& parquet_paths) const {
   auto table = LoadAndConcatenateTables(parquet_paths, true);
-  ValidateColumns(*table, input_columns_, target_columns_, true, "GroupClassifierLoader inputs");
+  ValidateColumns(*table, input_columns_, target_columns_, true, "GroupClassifierEventLoader inputs");
   InferenceBundle out;
   out.inputs = BuildGraph(*table);
   return out;
 }
 
-std::shared_ptr<arrow::Table> GroupClassifierLoader::LoadTable(const std::string& parquet_path) const {
+std::shared_ptr<arrow::Table> GroupClassifierEventLoader::LoadTable(const std::string& parquet_path) const {
   io::ParquetReader reader;
   return reader.ReadTable(parquet_path);
 }
 
-std::unique_ptr<BaseBatch> GroupClassifierLoader::BuildGraph(const arrow::Table& table) const {
-  utils::timing::ScopedTimer total_timer("group_classifier.build_graph");
-  auto input_cols = BindColumns(table, input_columns_, true, true, "GroupClassifierLoader inputs");
-  auto target_cols = BindColumns(table, target_columns_, false, true, "GroupClassifierLoader targets");
+std::unique_ptr<BaseBatch> GroupClassifierEventLoader::BuildGraph(const arrow::Table& table) const {
+  utils::timing::ScopedTimer total_timer("group_classifier_event.build_graph");
+  auto input_cols = BindColumns(table, input_columns_, true, true, "GroupClassifierEventLoader inputs");
+  auto target_cols = BindColumns(table, target_columns_, false, true, "GroupClassifierEventLoader targets");
   const bool has_targets = target_cols.size() == target_columns_.size();
 
   const auto& hits_x = static_cast<const arrow::ListArray&>(*input_cols.at("hits_x")->chunk(0));
@@ -140,13 +137,8 @@ std::unique_ptr<BaseBatch> GroupClassifierLoader::BuildGraph(const arrow::Table&
     const double* d{nullptr};
     bool is_double{false};
 
-    bool IsValid(int64_t idx) const {
-      return arr && arr->IsValid(idx);
-    }
-
-    double Value(int64_t idx) const {
-      return is_double ? d[idx] : static_cast<double>(f[idx]);
-    }
+    bool IsValid(int64_t idx) const { return arr && arr->IsValid(idx); }
+    double Value(int64_t idx) const { return is_double ? d[idx] : static_cast<double>(f[idx]); }
   };
 
   auto make_numeric_accessor = [](const std::shared_ptr<arrow::Array>& arr) -> NumericAccessor {
@@ -164,13 +156,14 @@ std::unique_ptr<BaseBatch> GroupClassifierLoader::BuildGraph(const arrow::Table&
       out.is_double = false;
       return out;
     }
-    throw std::runtime_error("Unsupported numeric type in group classifier loader.");
+    throw std::runtime_error("Unsupported numeric type in group classifier event loader.");
   };
 
   auto x_values = make_numeric_accessor(hits_x.values());
   auto y_values = make_numeric_accessor(hits_y.values());
   auto z_values = make_numeric_accessor(hits_z.values());
   auto edep_values = make_numeric_accessor(hits_edep.values());
+
   auto view_values = std::static_pointer_cast<arrow::NumericArray<arrow::Int32Type>>(hits_view.values());
   auto tg_values = std::static_pointer_cast<arrow::NumericArray<arrow::Int64Type>>(hits_time_group.values());
 
@@ -181,55 +174,17 @@ std::unique_ptr<BaseBatch> GroupClassifierLoader::BuildGraph(const arrow::Table&
   const int32_t* tg_offsets = hits_time_group.raw_value_offsets();
 
   const int64_t rows = table.num_rows();
+  std::vector<int64_t> node_counts(rows, 0);
+  std::vector<int64_t> edge_counts(rows, 0);
   std::vector<int64_t> group_counts(rows, 0);
-  std::vector<std::vector<int64_t>> group_node_counts(rows);
 
   {
-    utils::timing::ScopedTimer count_timer("group_classifier.count_groups");
+    utils::timing::ScopedTimer count_timer("group_classifier_event.count_nodes_edges");
     utils::parallel::Parallel::For(0, rows, [&](int64_t row) {
-      const int64_t n = static_cast<int64_t>(z_offsets[row + 1] - z_offsets[row]);
-      if (n == 0) {
-        group_counts[row] = 0;
-        return;
-      }
-      const int32_t start = z_offsets[row];
-      const int32_t tg_start = tg_offsets[row];
-      int64_t max_group = -1;
-      for (int64_t i = 0; i < n; ++i) {
-        max_group = std::max(max_group, tg_raw[tg_start + i]);
-      }
-      const int64_t groups_for_row = std::max<int64_t>(0, max_group + 1);
-      group_counts[row] = groups_for_row;
-      std::vector<int64_t> counts(groups_for_row, 0);
-      for (int64_t i = 0; i < n; ++i) {
-        const int64_t tg_val = tg_raw[tg_start + i];
-        if (tg_val < 0 || tg_val >= groups_for_row) {
-          throw std::runtime_error("Invalid time group id encountered.");
-        }
-        counts[tg_val] += 1;
-      }
-      group_node_counts[row] = std::move(counts);
+      int64_t n = static_cast<int64_t>(z_offsets[row + 1] - z_offsets[row]);
+      node_counts[row] = n;
+      edge_counts[row] = n * (n - 1);
     });
-  }
-
-  auto graph_offsets = utils::parallel::Parallel::PrefixSum(group_counts);
-  const int64_t total_graphs = graph_offsets.back();
-
-  std::vector<int64_t> node_counts(total_graphs, 0);
-  std::vector<int64_t> edge_counts(total_graphs, 0);
-  for (int64_t row = 0; row < rows; ++row) {
-    const int64_t groups_for_row = group_counts[row];
-    if (groups_for_row == 0) {
-      continue;
-    }
-    const int64_t graph_base = graph_offsets[row];
-    const auto& counts = group_node_counts[row];
-    for (int64_t g = 0; g < groups_for_row; ++g) {
-      const int64_t graph_idx = graph_base + g;
-      const int64_t count = counts[g];
-      node_counts[graph_idx] = count;
-      edge_counts[graph_idx] = count * (count - 1);
-    }
   }
 
   auto node_offsets = utils::parallel::Parallel::PrefixSum(node_counts);
@@ -249,12 +204,10 @@ std::unique_ptr<BaseBatch> GroupClassifierLoader::BuildGraph(const arrow::Table&
   auto edge_index_buf = alloc_buffer(total_edges * static_cast<int64_t>(sizeof(int64_t)) * 2);
   auto edge_attr_buf = alloc_buffer(total_edges * static_cast<int64_t>(sizeof(float)) * 4);
   auto time_group_buf = alloc_buffer(total_nodes * static_cast<int64_t>(sizeof(int64_t)));
-  auto node_ptr_buf = alloc_buffer((total_graphs + 1) * static_cast<int64_t>(sizeof(int64_t)));
-  auto edge_ptr_buf = alloc_buffer((total_graphs + 1) * static_cast<int64_t>(sizeof(int64_t)));
-  auto group_ptr_buf = alloc_buffer((total_graphs + 1) * static_cast<int64_t>(sizeof(int64_t)));
-  auto u_buf = alloc_buffer(total_graphs * static_cast<int64_t>(sizeof(float)));
-  auto graph_event_ids_buf = alloc_buffer(total_graphs * static_cast<int64_t>(sizeof(int64_t)));
-  auto graph_group_ids_buf = alloc_buffer(total_graphs * static_cast<int64_t>(sizeof(int64_t)));
+  auto node_ptr_buf = alloc_buffer((rows + 1) * static_cast<int64_t>(sizeof(int64_t)));
+  auto edge_ptr_buf = alloc_buffer((rows + 1) * static_cast<int64_t>(sizeof(int64_t)));
+  auto group_ptr_buf = alloc_buffer((rows + 1) * static_cast<int64_t>(sizeof(int64_t)));
+  auto u_buf = alloc_buffer(rows * static_cast<int64_t>(sizeof(float)));
 
   auto* node_feat = reinterpret_cast<float*>(node_feat_buf->mutable_data());
   auto* edge_index = reinterpret_cast<int64_t*>(edge_index_buf->mutable_data());
@@ -264,59 +217,28 @@ std::unique_ptr<BaseBatch> GroupClassifierLoader::BuildGraph(const arrow::Table&
   auto* edge_ptr = reinterpret_cast<int64_t*>(edge_ptr_buf->mutable_data());
   auto* group_ptr = reinterpret_cast<int64_t*>(group_ptr_buf->mutable_data());
   auto* u = reinterpret_cast<float*>(u_buf->mutable_data());
-  auto* graph_event_ids = reinterpret_cast<int64_t*>(graph_event_ids_buf->mutable_data());
-  auto* graph_group_ids = reinterpret_cast<int64_t*>(graph_group_ids_buf->mutable_data());
 
-  for (int64_t graph = 0; graph <= total_graphs; ++graph) {
-    node_ptr[graph] = node_offsets[graph];
-    edge_ptr[graph] = edge_offsets[graph];
-    group_ptr[graph] = graph;
+  for (int64_t row = 0; row <= rows; ++row) {
+    node_ptr[row] = node_offsets[row];
+    edge_ptr[row] = edge_offsets[row];
   }
 
   {
-    utils::timing::ScopedTimer build_timer("group_classifier.build_groups");
+    utils::timing::ScopedTimer build_timer("group_classifier_event.build_rows");
     utils::parallel::Parallel::For(0, rows, [&](int64_t row) {
-      const int64_t n = static_cast<int64_t>(z_offsets[row + 1] - z_offsets[row]);
+      const int64_t n = node_counts[row];
+      const int64_t node_offset = node_offsets[row];
+      const int64_t edge_offset = edge_offsets[row];
       const int32_t start = z_offsets[row];
       const int32_t tg_start = tg_offsets[row];
       const int64_t tg_len = static_cast<int64_t>(tg_offsets[row + 1] - tg_offsets[row]);
-      if (tg_len < n) {
-        throw std::runtime_error("hits_time_group length mismatch with hits.");
-      }
 
-      const int64_t groups_for_row = group_counts[row];
-      if (groups_for_row == 0) {
-        return;
-      }
+      double sum_edep = 0.0;
 
-      std::vector<std::vector<int64_t>> group_nodes(groups_for_row);
-      for (int64_t g = 0; g < groups_for_row; ++g) {
-        group_nodes[g].reserve(static_cast<size_t>(group_node_counts[row][g]));
-      }
+      int64_t max_group = -1;
       for (int64_t i = 0; i < n; ++i) {
-        const int64_t tg_val = tg_raw[tg_start + i];
-        if (tg_val < 0 || tg_val >= groups_for_row) {
-          throw std::runtime_error("Invalid time group id encountered.");
-        }
-        group_nodes[tg_val].push_back(i);
-      }
-
-      const int64_t graph_base = graph_offsets[row];
-      for (int64_t g = 0; g < groups_for_row; ++g) {
-        const int64_t graph_idx = graph_base + g;
-        graph_event_ids[graph_idx] = row;
-        graph_group_ids[graph_idx] = g;
-
-        const int64_t node_offset = node_offsets[graph_idx];
-        const int64_t edge_offset = edge_offsets[graph_idx];
-        const auto& nodes = group_nodes[g];
-        const int64_t k = static_cast<int64_t>(nodes.size());
-
-        double sum_edep = 0.0;
-        for (int64_t local = 0; local < k; ++local) {
-          const int64_t i = nodes[local];
-          const int64_t idx = node_offset + local;
-          const int64_t base = idx * 4;
+        const int64_t idx = node_offset + i;
+        const int64_t base = idx * 4;
         const int32_t view = view_raw[start + i];
         double coord = 0.0;
         if (view == 0) {
@@ -339,75 +261,86 @@ std::unique_ptr<BaseBatch> GroupClassifierLoader::BuildGraph(const arrow::Table&
         node_feat[base + 2] = static_cast<float>(
             edep_values.IsValid(start + i) ? edep_values.Value(start + i) : 0.0);
         node_feat[base + 3] = static_cast<float>(view);
-        time_group_ids[idx] = g;
-        sum_edep += edep_values.IsValid(start + i) ? edep_values.Value(start + i) : 0.0;
+
+        if (tg_len < n) {
+          throw std::runtime_error("hits_time_group length mismatch with hits.");
+        }
+        const int64_t tg_val = tg_raw[tg_start + i];
+        time_group_ids[idx] = tg_val;
+        if (tg_val > max_group) {
+          max_group = tg_val;
         }
 
-        u[graph_idx] = static_cast<float>(sum_edep);
+        sum_edep += edep_values.IsValid(start + i) ? edep_values.Value(start + i) : 0.0;
+      }
 
-        int64_t edge_local = 0;
-        for (int64_t a = 0; a < k; ++a) {
-          const int64_t i = nodes[a];
-          const int32_t view_i = view_raw[start + i];
-          double coord_i = 0.0;
-          if (view_i == 0) {
-            if (x_values.IsValid(start + i)) {
-              coord_i = x_values.Value(start + i);
-            } else if (y_values.IsValid(start + i)) {
-              coord_i = y_values.Value(start + i);
+      u[row] = static_cast<float>(sum_edep);
+
+      const int64_t groups_for_row = std::max<int64_t>(0, max_group + 1);
+      if (groups_for_row == 0 && n > 0) {
+        throw std::runtime_error("No time groups found for non-empty event.");
+      }
+      group_counts[row] = groups_for_row;
+
+      int64_t edge_local = 0;
+      for (int64_t i = 0; i < n; ++i) {
+        const int32_t view_i = view_raw[start + i];
+        double coord_i = 0.0;
+        if (view_i == 0) {
+          if (x_values.IsValid(start + i)) {
+            coord_i = x_values.Value(start + i);
+          } else if (y_values.IsValid(start + i)) {
+            coord_i = y_values.Value(start + i);
+          }
+        } else {
+          if (y_values.IsValid(start + i)) {
+            coord_i = y_values.Value(start + i);
+          } else if (x_values.IsValid(start + i)) {
+            coord_i = x_values.Value(start + i);
+          }
+        }
+        for (int64_t j = 0; j < n; ++j) {
+          if (i == j) continue;
+          const int64_t edge_idx = edge_offset + edge_local;
+          const int64_t edge_base = edge_idx * 2;
+          const int64_t attr_base = edge_idx * 4;
+
+          edge_index[edge_base] = node_offset + i;
+          edge_index[edge_base + 1] = node_offset + j;
+
+          const int32_t view_j = view_raw[start + j];
+          double coord_j = 0.0;
+          if (view_j == 0) {
+            if (x_values.IsValid(start + j)) {
+              coord_j = x_values.Value(start + j);
+            } else if (y_values.IsValid(start + j)) {
+              coord_j = y_values.Value(start + j);
             }
           } else {
-            if (y_values.IsValid(start + i)) {
-              coord_i = y_values.Value(start + i);
-            } else if (x_values.IsValid(start + i)) {
-              coord_i = x_values.Value(start + i);
+            if (y_values.IsValid(start + j)) {
+              coord_j = y_values.Value(start + j);
+            } else if (x_values.IsValid(start + j)) {
+              coord_j = x_values.Value(start + j);
             }
           }
-          for (int64_t b = 0; b < k; ++b) {
-            if (a == b) continue;
-            const int64_t j = nodes[b];
-            const int64_t edge_idx = edge_offset + edge_local;
-            const int64_t edge_base = edge_idx * 2;
-            const int64_t attr_base = edge_idx * 4;
 
-            edge_index[edge_base] = node_offset + a;
-            edge_index[edge_base + 1] = node_offset + b;
+          const double z_i = z_values.IsValid(start + i) ? z_values.Value(start + i) : 0.0;
+          const double z_j = z_values.IsValid(start + j) ? z_values.Value(start + j) : 0.0;
+          const double e_i = edep_values.IsValid(start + i) ? edep_values.Value(start + i) : 0.0;
+          const double e_j = edep_values.IsValid(start + j) ? edep_values.Value(start + j) : 0.0;
 
-            const int32_t view_j = view_raw[start + j];
-            double coord_j = 0.0;
-            if (view_j == 0) {
-              if (x_values.IsValid(start + j)) {
-                coord_j = x_values.Value(start + j);
-              } else if (y_values.IsValid(start + j)) {
-                coord_j = y_values.Value(start + j);
-              }
-            } else {
-              if (y_values.IsValid(start + j)) {
-                coord_j = y_values.Value(start + j);
-              } else if (x_values.IsValid(start + j)) {
-                coord_j = x_values.Value(start + j);
-              }
-            }
+          edge_attr[attr_base] = static_cast<float>(coord_j - coord_i);
+          edge_attr[attr_base + 1] = static_cast<float>(z_j - z_i);
+          edge_attr[attr_base + 2] = static_cast<float>(e_j - e_i);
+          edge_attr[attr_base + 3] = (view_i == view_j) ? 1.0f : 0.0f;
 
-            edge_attr[attr_base] = static_cast<float>(coord_j - coord_i);
-            const double z_i = z_values.IsValid(start + i) ? z_values.Value(start + i) : 0.0;
-            const double z_j = z_values.IsValid(start + j) ? z_values.Value(start + j) : 0.0;
-            const double e_i =
-                edep_values.IsValid(start + i) ? edep_values.Value(start + i) : 0.0;
-            const double e_j =
-                edep_values.IsValid(start + j) ? edep_values.Value(start + j) : 0.0;
-            edge_attr[attr_base + 1] = static_cast<float>(z_j - z_i);
-            edge_attr[attr_base + 2] = static_cast<float>(e_j - e_i);
-            edge_attr[attr_base + 3] = (view_i == view_j) ? 1.0f : 0.0f;
-
-            edge_local++;
-          }
+          edge_local++;
         }
       }
     });
   }
 
-  utils::timing::ScopedTimer finalize_timer("group_classifier.finalize_arrays");
+  utils::timing::ScopedTimer finalize_timer("group_classifier_event.finalize_arrays");
   auto make_array = [](std::shared_ptr<arrow::Buffer> buf,
                        std::shared_ptr<arrow::DataType> type,
                        int64_t length) {
@@ -416,7 +349,11 @@ std::unique_ptr<BaseBatch> GroupClassifierLoader::BuildGraph(const arrow::Table&
   };
 
   auto out = std::make_unique<GroupClassifierInputs>();
-  const int64_t total_groups = total_graphs;
+  group_ptr[0] = 0;
+  for (int64_t row = 0; row < rows; ++row) {
+    group_ptr[row + 1] = group_ptr[row] + group_counts[row];
+  }
+  const int64_t total_groups = group_ptr[rows];
 
   std::shared_ptr<arrow::Buffer> y_buf;
   std::shared_ptr<arrow::Buffer> y_energy_buf;
@@ -489,7 +426,7 @@ std::unique_ptr<BaseBatch> GroupClassifierLoader::BuildGraph(const arrow::Table&
       if (count != group_counts[row]) {
         throw std::runtime_error("Target list length does not match time groups.");
       }
-      const int64_t base_group = graph_offsets[row];
+      const int64_t base_group = group_ptr[row];
       const int32_t start = pion_offsets[row];
       for (int64_t g = 0; g < count; ++g) {
         const int64_t base = (base_group + g) * 3;
@@ -508,12 +445,10 @@ std::unique_ptr<BaseBatch> GroupClassifierLoader::BuildGraph(const arrow::Table&
   out->edge_index = make_array(edge_index_buf, arrow::int64(), total_edges * 2);
   out->edge_attr = make_array(edge_attr_buf, arrow::float32(), total_edges * 4);
   out->time_group_ids = make_array(time_group_buf, arrow::int64(), total_nodes);
-  out->node_ptr = make_array(node_ptr_buf, arrow::int64(), total_graphs + 1);
-  out->edge_ptr = make_array(edge_ptr_buf, arrow::int64(), total_graphs + 1);
-  out->group_ptr = make_array(group_ptr_buf, arrow::int64(), total_graphs + 1);
-  out->u = make_array(u_buf, arrow::float32(), total_graphs);
-  out->graph_event_ids = make_array(graph_event_ids_buf, arrow::int64(), total_graphs);
-  out->graph_group_ids = make_array(graph_group_ids_buf, arrow::int64(), total_graphs);
+  out->node_ptr = make_array(node_ptr_buf, arrow::int64(), rows + 1);
+  out->edge_ptr = make_array(edge_ptr_buf, arrow::int64(), rows + 1);
+  out->group_ptr = make_array(group_ptr_buf, arrow::int64(), rows + 1);
+  out->u = make_array(u_buf, arrow::float32(), rows);
 
   if (has_targets) {
     out->y = make_array(y_buf, arrow::float32(), total_groups * 3);
@@ -523,12 +458,12 @@ std::unique_ptr<BaseBatch> GroupClassifierLoader::BuildGraph(const arrow::Table&
     out->y_energy = nullptr;
   }
 
-  out->num_graphs = static_cast<size_t>(total_graphs);
+  out->num_graphs = static_cast<size_t>(rows);
   out->num_groups = static_cast<size_t>(total_groups);
   return out;
 }
 
-TrainingBundle GroupClassifierLoader::SplitInputsTargets(std::unique_ptr<BaseBatch> batch_base) const {
+TrainingBundle GroupClassifierEventLoader::SplitInputsTargets(std::unique_ptr<BaseBatch> batch_base) const {
   auto* typed = dynamic_cast<GroupClassifierInputs*>(batch_base.get());
   if (!typed) {
     throw std::runtime_error("Unexpected batch type in SplitInputsTargets");

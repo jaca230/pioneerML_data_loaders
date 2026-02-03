@@ -19,14 +19,17 @@ PYBIND11_MODULE(pioneerml_dataloaders_python, m) {
 
   auto m_graph = m_dataloaders.def_submodule("graph");
   pioneerml::bindings::BindGroupClassifierLoader(m_graph);
+  pioneerml::bindings::BindGroupClassifierEventLoader(m_graph);
 
   auto m_adapters = m.def_submodule("adapters");
   auto m_input = m_adapters.def_submodule("input");
   auto m_output = m_adapters.def_submodule("output");
   auto m_input_graph = m_input.def_submodule("graph");
   pioneerml::bindings::BindGroupClassifierInputAdapter(m_input_graph);
+  pioneerml::bindings::BindGroupClassifierEventInputAdapter(m_input_graph);
   auto m_output_graph = m_output.def_submodule("graph");
   pioneerml::bindings::BindGroupClassifierOutputAdapter(m_output_graph);
+  pioneerml::bindings::BindGroupClassifierEventOutputAdapter(m_output_graph);
 
   auto m_utils = m.def_submodule("utils");
   auto m_logging = m_utils.def_submodule("logging");

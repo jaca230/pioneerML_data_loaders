@@ -10,36 +10,38 @@
 
 namespace pioneerml::output_adapters::graph {
 
-class GroupClassifierOutputAdapter : public GraphOutputAdapter {
+class GroupClassifierEventOutputAdapter : public GraphOutputAdapter {
  public:
-  GroupClassifierOutputAdapter() = default;
+  GroupClassifierEventOutputAdapter() = default;
 
   std::shared_ptr<arrow::Table> BuildEventTable(
       const std::shared_ptr<arrow::Array>& group_pred,
       const std::shared_ptr<arrow::Array>& group_pred_energy,
-      const std::shared_ptr<arrow::Array>& graph_event_ids,
-      const std::shared_ptr<arrow::Array>& graph_group_ids) const;
+      const std::shared_ptr<arrow::Array>& node_ptr,
+      const std::shared_ptr<arrow::Array>& time_group_ids) const;
 
   void WriteParquet(
       const std::string& output_path,
       const std::shared_ptr<arrow::Array>& group_pred,
       const std::shared_ptr<arrow::Array>& group_pred_energy,
-      const std::shared_ptr<arrow::Array>& graph_event_ids,
-      const std::shared_ptr<arrow::Array>& graph_group_ids) const;
+      const std::shared_ptr<arrow::Array>& node_ptr,
+      const std::shared_ptr<arrow::Array>& time_group_ids) const;
 
  private:
-  struct GroupIndexLists {
-    std::vector<std::vector<int64_t>> graphs_by_event;
+  struct GroupOffsets {
+    std::vector<int64_t> offsets;
+    std::vector<int64_t> counts;
   };
 
-  GroupIndexLists BuildGraphIndexLists(
-      const arrow::Array& graph_event_ids,
-      const arrow::Array& graph_group_ids) const;
+  GroupOffsets ComputeGroupOffsets(
+      const arrow::Array& node_ptr,
+      const arrow::Array& time_group_ids) const;
 
   std::shared_ptr<arrow::Array> BuildGroupListColumn(
       const float* pred_raw,
       int64_t num_groups,
-      const std::vector<std::vector<int64_t>>& graphs_by_event,
+      const std::vector<int64_t>& offsets,
+      const std::vector<int64_t>& counts,
       int class_index) const;
 };
 

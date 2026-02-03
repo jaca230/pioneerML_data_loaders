@@ -20,6 +20,8 @@ struct GroupClassifierInputs : public BaseBatch {
   std::shared_ptr<arrow::Array> node_ptr;        // int64,   length = num_graphs + 1
   std::shared_ptr<arrow::Array> edge_ptr;        // int64,   length = num_graphs + 1
   std::shared_ptr<arrow::Array> group_ptr;       // int64,   length = num_graphs + 1
+  std::shared_ptr<arrow::Array> graph_event_ids;  // int64, length = num_graphs
+  std::shared_ptr<arrow::Array> graph_group_ids;  // int64, length = num_graphs
   // Labels kept here initially; stripped for inference.
   std::shared_ptr<arrow::Array> y;         // float32, length = num_groups * 3
   std::shared_ptr<arrow::Array> y_energy;  // float32, length = num_groups * 3

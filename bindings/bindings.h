@@ -10,9 +10,12 @@ void BindGroupClassifierTargets(pybind11::module_& m);
 
 void BindBaseLoader(pybind11::module_& m);
 void BindGroupClassifierLoader(pybind11::module_& m);
+void BindGroupClassifierEventLoader(pybind11::module_& m);
 
 void BindGroupClassifierInputAdapter(pybind11::module_& m);
+void BindGroupClassifierEventInputAdapter(pybind11::module_& m);
 void BindGroupClassifierOutputAdapter(pybind11::module_& m);
+void BindGroupClassifierEventOutputAdapter(pybind11::module_& m);
 
 void BindLogging(pybind11::module_& m);
 void BindTiming(pybind11::module_& m);
