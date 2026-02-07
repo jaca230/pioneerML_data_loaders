@@ -2,13 +2,14 @@
 
 #include <memory>
 #include <string>
-#include <unordered_map>
 #include <vector>
 
 #include <arrow/api.h>
+#include <arrow/buffer.h>
 
 #include "pioneerml_dataloaders/batch/base_batch.h"
 #include "pioneerml_dataloaders/configurable/data_derivers/base_deriver.h"
+#include "pioneerml_dataloaders/utils/parquet/parquet_utils.h"
 
 namespace pioneerml::dataloaders {
 
@@ -27,19 +28,14 @@ class DataLoader : public pioneerml::configurable::Configurable {
   virtual ~DataLoader() = default;
 
   // Load inputs + targets for training.
-  virtual TrainingBundle LoadTraining(const std::string& parquet_path) const = 0;
-  virtual TrainingBundle LoadTraining(
-      const std::vector<std::string>& parquet_paths) const;
+  virtual TrainingBundle LoadTraining(const std::shared_ptr<arrow::Table>& table) const = 0;
 
   // Load inputs only for inference.
-  virtual InferenceBundle LoadInference(const std::string& parquet_path) const = 0;
-  virtual InferenceBundle LoadInference(
-      const std::vector<std::string>& parquet_paths) const;
+  virtual InferenceBundle LoadInference(const std::shared_ptr<arrow::Table>& table) const = 0;
 
  protected:
-  // Optional helper for derived loaders that need the raw table.
-  virtual std::shared_ptr<arrow::Table> LoadTable(const std::string& parquet_path) const = 0;
-
+  // Derived loaders can override if they need custom input/target splitting.
+  virtual TrainingBundle SplitInputsTargets(std::unique_ptr<BaseBatch> batch) const = 0;
   struct DeriverSpec {
     std::vector<std::string> names;
     std::shared_ptr<data_derivers::BaseDeriver> deriver;
@@ -54,35 +50,31 @@ class DataLoader : public pioneerml::configurable::Configurable {
   virtual std::shared_ptr<arrow::Table> AddDerivedColumns(
       const std::shared_ptr<arrow::Table>& table) const;
 
-  std::shared_ptr<arrow::Table> LoadAndConcatenateTables(
-      const std::vector<std::string>& parquet_paths,
+  std::shared_ptr<arrow::Table> PrepareTable(
+      const std::shared_ptr<arrow::Table>& table,
       bool add_derived) const;
 
   std::vector<std::string> input_columns_;
   std::vector<std::string> target_columns_;
 
-  std::string JoinNames(const std::vector<std::string>& names,
-                        const std::string& sep = ", ") const;
+  using NumericAccessor = pioneerml::utils::parquet::NumericAccessor;
 
-  std::vector<std::string> MissingColumns(const arrow::Table& table,
-                                          const std::vector<std::string>& required) const;
+  NumericAccessor MakeNumericAccessor(const std::shared_ptr<arrow::Array>& arr,
+                                      const std::string& context) const;
+  std::shared_ptr<arrow::Buffer> AllocBuffer(int64_t bytes) const;
+  std::shared_ptr<arrow::Array> MakeArray(std::shared_ptr<arrow::Buffer> buffer,
+                                          const std::shared_ptr<arrow::DataType>& type,
+                                          int64_t length) const;
+  double ResolveCoordinateForView(const NumericAccessor& x_values,
+                                  const NumericAccessor& y_values,
+                                  int32_t view,
+                                  int64_t idx) const;
 
-  void ValidateColumns(const arrow::Table& table,
-                       const std::vector<std::string>& required,
-                       const std::vector<std::string>& optional,
-                       bool require_single_chunk,
-                       const std::string& context) const;
+  std::vector<int64_t> BuildOffsets(const std::vector<int64_t>& counts) const;
+  void FillPointerArrayFromOffsets(const std::vector<int64_t>& offsets,
+                                   int64_t* out_ptr) const;
 
-  std::vector<std::string> MergeColumns(const std::vector<std::string>& left,
-                                        const std::vector<std::string>& right) const;
-
-  using ColumnMap = std::unordered_map<std::string, std::shared_ptr<arrow::ChunkedArray>>;
-
-  ColumnMap BindColumns(const arrow::Table& table,
-                        const std::vector<std::string>& names,
-                        bool require_all,
-                        bool require_single_chunk,
-                        const std::string& context) const;
+  using ColumnMap = pioneerml::utils::parquet::ColumnMap;
 };
 
 }  // namespace pioneerml::dataloaders

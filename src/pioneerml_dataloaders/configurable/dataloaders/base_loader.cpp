@@ -1,11 +1,11 @@
 #include "pioneerml_dataloaders/configurable/dataloaders/base_loader.h"
 
-#include <sstream>
 #include <stdexcept>
 
 #include <arrow/table.h>
 
 #include "pioneerml_dataloaders/utils/parallel/parallel.h"
+#include "pioneerml_dataloaders/utils/parquet/parquet_utils.h"
 #include "pioneerml_dataloaders/utils/timing/scoped_timer.h"
 namespace pioneerml::dataloaders {
 
@@ -17,16 +17,6 @@ void DataLoader::AddDeriver(std::string name,
 void DataLoader::AddDeriver(std::vector<std::string> names,
                             std::shared_ptr<data_derivers::BaseDeriver> deriver) {
   derivers_.push_back({std::move(names), std::move(deriver)});
-}
-
-TrainingBundle DataLoader::LoadTraining(
-    const std::vector<std::string>& parquet_paths) const {
-  throw std::runtime_error("LoadTraining(paths) not implemented for this loader.");
-}
-
-InferenceBundle DataLoader::LoadInference(
-    const std::vector<std::string>& parquet_paths) const {
-  throw std::runtime_error("LoadInference(paths) not implemented for this loader.");
 }
 
 std::shared_ptr<arrow::Table> DataLoader::AddDerivedColumns(
@@ -75,133 +65,79 @@ std::shared_ptr<arrow::Table> DataLoader::AddDerivedColumns(
   return current;
 }
 
-std::shared_ptr<arrow::Table> DataLoader::LoadAndConcatenateTables(
-    const std::vector<std::string>& parquet_paths,
+std::shared_ptr<arrow::Table> DataLoader::PrepareTable(
+    const std::shared_ptr<arrow::Table>& table,
     bool add_derived) const {
-  utils::timing::ScopedTimer total_timer("loader.load_and_concat");
-  if (parquet_paths.empty()) {
-    throw std::runtime_error("No parquet paths provided.");
+  utils::timing::ScopedTimer total_timer("loader.prepare_table");
+  if (!table) {
+    throw std::runtime_error("Null table provided.");
   }
-  std::vector<std::shared_ptr<arrow::Table>> tables(parquet_paths.size());
-  std::vector<std::exception_ptr> errors(parquet_paths.size());
-
-  utils::parallel::Parallel::For(0, static_cast<int64_t>(parquet_paths.size()),
-                                 [&](int64_t idx) {
-    const auto& path = parquet_paths[static_cast<size_t>(idx)];
-    try {
-      utils::timing::ScopedTimer read_timer("loader.read_table");
-      auto table = LoadTable(path);
-      if (add_derived) {
-        utils::timing::ScopedTimer derive_timer("loader.add_derived");
-        table = AddDerivedColumns(table);
-      }
-      tables[static_cast<size_t>(idx)] = std::move(table);
-    } catch (...) {
-      errors[static_cast<size_t>(idx)] = std::current_exception();
-    }
-  });
-
-  for (const auto& err : errors) {
-    if (err) {
-      std::rethrow_exception(err);
-    }
+  auto prepared = table;
+  if (add_derived) {
+    utils::timing::ScopedTimer derive_timer("loader.add_derived");
+    prepared = AddDerivedColumns(prepared);
   }
-
-  utils::timing::ScopedTimer concat_timer("loader.concat_tables");
-  auto result = arrow::ConcatenateTables(tables);
-  if (!result.ok()) {
-    throw std::runtime_error(result.status().ToString());
-  }
-  auto combined = result.MoveValueUnsafe();
   utils::timing::ScopedTimer combine_timer("loader.combine_chunks");
-  auto combine_result = combined->CombineChunks(arrow::default_memory_pool());
+  auto combine_result = prepared->CombineChunks(arrow::default_memory_pool());
   if (!combine_result.ok()) {
     throw std::runtime_error(combine_result.status().ToString());
   }
   return combine_result.MoveValueUnsafe();
 }
 
-std::string DataLoader::JoinNames(const std::vector<std::string>& names,
-                                  const std::string& sep) const {
-  std::ostringstream out;
-  for (size_t i = 0; i < names.size(); ++i) {
-    if (i > 0) out << sep;
-    out << names[i];
-  }
-  return out.str();
+DataLoader::NumericAccessor DataLoader::MakeNumericAccessor(
+    const std::shared_ptr<arrow::Array>& arr,
+    const std::string& context) const {
+  return utils::parquet::NumericAccessor::FromArray(arr, context);
 }
 
-std::vector<std::string> DataLoader::MissingColumns(
-    const arrow::Table& table,
-    const std::vector<std::string>& required) const {
-  std::vector<std::string> missing;
-  missing.reserve(required.size());
-  for (const auto& name : required) {
-    if (!table.GetColumnByName(name)) {
-      missing.push_back(name);
-    }
+std::shared_ptr<arrow::Buffer> DataLoader::AllocBuffer(int64_t bytes) const {
+  auto result = arrow::AllocateBuffer(bytes);
+  if (!result.ok()) {
+    throw std::runtime_error(result.status().ToString());
   }
-  return missing;
+  return std::shared_ptr<arrow::Buffer>(std::move(result).ValueOrDie());
 }
 
-void DataLoader::ValidateColumns(const arrow::Table& table,
-                                 const std::vector<std::string>& required,
-                                 const std::vector<std::string>& optional,
-                                 bool require_single_chunk,
-                                 const std::string& context) const {
-  auto missing = MissingColumns(table, required);
-  if (!missing.empty()) {
-    throw std::runtime_error(context + " missing columns: " + JoinNames(missing));
-  }
-
-  if (!require_single_chunk) {
-    return;
-  }
-
-  auto check_chunks = [&](const std::string& name) {
-    auto col = table.GetColumnByName(name);
-    if (col && col->num_chunks() != 1) {
-      throw std::runtime_error(context + " column has multiple chunks: " + name);
-    }
-  };
-
-  for (const auto& name : required) check_chunks(name);
-  for (const auto& name : optional) check_chunks(name);
+std::shared_ptr<arrow::Array> DataLoader::MakeArray(
+    std::shared_ptr<arrow::Buffer> buffer,
+    const std::shared_ptr<arrow::DataType>& type,
+    int64_t length) const {
+  auto data = arrow::ArrayData::Make(type, length, {nullptr, std::move(buffer)});
+  return arrow::MakeArray(std::move(data));
 }
 
-std::vector<std::string> DataLoader::MergeColumns(
-    const std::vector<std::string>& left,
-    const std::vector<std::string>& right) const {
-  std::vector<std::string> out;
-  out.reserve(left.size() + right.size());
-  out.insert(out.end(), left.begin(), left.end());
-  out.insert(out.end(), right.begin(), right.end());
-  return out;
+double DataLoader::ResolveCoordinateForView(const NumericAccessor& x_values,
+                                            const NumericAccessor& y_values,
+                                            int32_t view,
+                                            int64_t idx) const {
+  if (view == 0) {
+    if (x_values.IsValid(idx)) {
+      return x_values.Value(idx);
+    }
+    if (y_values.IsValid(idx)) {
+      return y_values.Value(idx);
+    }
+    return 0.0;
+  }
+  if (y_values.IsValid(idx)) {
+    return y_values.Value(idx);
+  }
+  if (x_values.IsValid(idx)) {
+    return x_values.Value(idx);
+  }
+  return 0.0;
 }
 
-DataLoader::ColumnMap DataLoader::BindColumns(const arrow::Table& table,
-                                              const std::vector<std::string>& names,
-                                              bool require_all,
-                                              bool require_single_chunk,
-                                              const std::string& context) const {
-  ColumnMap out;
-  out.reserve(names.size());
-  std::vector<std::string> missing;
-  for (const auto& name : names) {
-    auto col = table.GetColumnByName(name);
-    if (!col) {
-      missing.push_back(name);
-      continue;
-    }
-    if (require_single_chunk && col->num_chunks() != 1) {
-      throw std::runtime_error(context + " column has multiple chunks: " + name);
-    }
-    out.emplace(name, std::move(col));
+std::vector<int64_t> DataLoader::BuildOffsets(const std::vector<int64_t>& counts) const {
+  return utils::parallel::Parallel::PrefixSum(counts);
+}
+
+void DataLoader::FillPointerArrayFromOffsets(const std::vector<int64_t>& offsets,
+                                             int64_t* out_ptr) const {
+  for (size_t i = 0; i < offsets.size(); ++i) {
+    out_ptr[i] = offsets[i];
   }
-  if (require_all && !missing.empty()) {
-    throw std::runtime_error(context + " missing columns: " + JoinNames(missing));
-  }
-  return out;
 }
 
 }  // namespace pioneerml::dataloaders

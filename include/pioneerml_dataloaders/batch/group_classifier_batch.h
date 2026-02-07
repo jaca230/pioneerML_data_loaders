@@ -24,14 +24,12 @@ struct GroupClassifierInputs : public BaseBatch {
   std::shared_ptr<arrow::Array> graph_group_ids;  // int64, length = num_graphs
   // Labels kept here initially; stripped for inference.
   std::shared_ptr<arrow::Array> y;         // float32, length = num_groups * 3
-  std::shared_ptr<arrow::Array> y_energy;  // float32, length = num_groups * 3
   size_t num_graphs{0};
   size_t num_groups{0};
 };
 
 struct GroupClassifierTargets : public BaseBatch {
   std::shared_ptr<arrow::Array> y;         // float32, length = num_groups * 3
-  std::shared_ptr<arrow::Array> y_energy;  // float32, length = num_groups * 3
   size_t num_groups{0};
 };
 

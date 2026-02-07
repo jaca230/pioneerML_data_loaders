@@ -18,23 +18,27 @@ void BindGroupClassifierEventInputAdapter(py::module_& m) {
       .def("load_training",
            static_cast<pioneerml::dataloaders::TrainingBundle (
                pioneerml::input_adapters::graph::GroupClassifierEventInputAdapter::*)(
-               const std::string&) const>(
-               &pioneerml::input_adapters::graph::GroupClassifierEventInputAdapter::LoadTraining))
-      .def("load_training",
-           static_cast<pioneerml::dataloaders::TrainingBundle (
-               pioneerml::input_adapters::graph::GroupClassifierEventInputAdapter::*)(
-               const std::vector<std::string>&) const>(
+               const nlohmann::json&) const>(
                &pioneerml::input_adapters::graph::GroupClassifierEventInputAdapter::LoadTraining))
       .def("load_inference",
            static_cast<pioneerml::dataloaders::InferenceBundle (
                pioneerml::input_adapters::graph::GroupClassifierEventInputAdapter::*)(
-               const std::string&) const>(
+               const nlohmann::json&) const>(
                &pioneerml::input_adapters::graph::GroupClassifierEventInputAdapter::LoadInference))
-      .def("load_inference",
-           static_cast<pioneerml::dataloaders::InferenceBundle (
-               pioneerml::input_adapters::graph::GroupClassifierEventInputAdapter::*)(
-               const std::vector<std::string>&) const>(
-               &pioneerml::input_adapters::graph::GroupClassifierEventInputAdapter::LoadInference))
+      .def(
+          "load_training_json",
+          [](const pioneerml::input_adapters::graph::GroupClassifierEventInputAdapter& adapter,
+             const std::string& json_str) {
+            return adapter.LoadTraining(nlohmann::json::parse(json_str));
+          },
+          py::arg("json_str"))
+      .def(
+          "load_inference_json",
+          [](const pioneerml::input_adapters::graph::GroupClassifierEventInputAdapter& adapter,
+             const std::string& json_str) {
+            return adapter.LoadInference(nlohmann::json::parse(json_str));
+          },
+          py::arg("json_str"))
       .def(
           "load_config_json",
           [](pioneerml::input_adapters::graph::GroupClassifierEventInputAdapter& adapter,

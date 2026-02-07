@@ -15,25 +15,29 @@ void BindGroupClassifierInputAdapter(py::module_& m) {
       m, "GroupClassifierInputAdapter")
       .def(py::init<>())
       .def("load_training",
-           py::overload_cast<const std::string&>(
+           py::overload_cast<const nlohmann::json&>(
                &pioneerml::input_adapters::graph::GroupClassifierInputAdapter::LoadTraining,
                py::const_),
-           py::arg("parquet_path"))
-      .def("load_training",
-           py::overload_cast<const std::vector<std::string>&>(
-               &pioneerml::input_adapters::graph::GroupClassifierInputAdapter::LoadTraining,
-               py::const_),
-           py::arg("parquet_paths"))
+           py::arg("input_spec"))
       .def("load_inference",
-           py::overload_cast<const std::string&>(
+           py::overload_cast<const nlohmann::json&>(
                &pioneerml::input_adapters::graph::GroupClassifierInputAdapter::LoadInference,
                py::const_),
-           py::arg("parquet_path"))
-      .def("load_inference",
-           py::overload_cast<const std::vector<std::string>&>(
-               &pioneerml::input_adapters::graph::GroupClassifierInputAdapter::LoadInference,
-               py::const_),
-           py::arg("parquet_paths"))
+           py::arg("input_spec"))
+      .def(
+          "load_training_json",
+          [](const pioneerml::input_adapters::graph::GroupClassifierInputAdapter& adapter,
+             const std::string& json_str) {
+            return adapter.LoadTraining(nlohmann::json::parse(json_str));
+          },
+          py::arg("json_str"))
+      .def(
+          "load_inference_json",
+          [](const pioneerml::input_adapters::graph::GroupClassifierInputAdapter& adapter,
+             const std::string& json_str) {
+            return adapter.LoadInference(nlohmann::json::parse(json_str));
+          },
+          py::arg("json_str"))
       .def(
           "load_config_json",
           [](pioneerml::input_adapters::graph::GroupClassifierInputAdapter& adapter,

@@ -3,7 +3,9 @@
 #include <arrow/api.h>
 
 #include <memory>
+#include <unordered_map>
 #include <stdexcept>
+#include <string>
 #include <utility>
 #include <vector>
 
@@ -37,5 +39,57 @@ class ParquetUtils {
     return typed.raw_values() + row;
   }
 };
+
+using ColumnMap = std::unordered_map<std::string, std::shared_ptr<arrow::ChunkedArray>>;
+
+class NumericAccessor {
+ public:
+  NumericAccessor() = default;
+
+  static NumericAccessor FromArray(const std::shared_ptr<arrow::Array>& arr,
+                                   const std::string& context);
+
+  bool IsValid(int64_t idx) const { return arr_ && arr_->IsValid(idx); }
+  double Value(int64_t idx) const { return is_double_ ? d_[idx] : static_cast<double>(f_[idx]); }
+
+ private:
+  std::shared_ptr<arrow::Array> arr_;
+  const float* f_{nullptr};
+  const double* d_{nullptr};
+  bool is_double_{false};
+};
+
+std::string JoinNames(const std::vector<std::string>& names,
+                      const std::string& sep = ", ");
+
+std::vector<std::string> MissingColumns(const arrow::Table& table,
+                                        const std::vector<std::string>& required);
+
+void ValidateColumns(const arrow::Table& table,
+                     const std::vector<std::string>& required,
+                     const std::vector<std::string>& optional,
+                     bool require_single_chunk,
+                     const std::string& context);
+
+std::vector<std::string> MergeColumns(const std::vector<std::string>& left,
+                                      const std::vector<std::string>& right);
+
+ColumnMap BindColumns(const arrow::Table& table,
+                      const std::vector<std::string>& names,
+                      bool require_all,
+                      bool require_single_chunk,
+                      const std::string& context);
+
+std::shared_ptr<arrow::Table> MergeTablesByColumns(
+    const std::vector<std::shared_ptr<arrow::Table>>& tables);
+
+std::shared_ptr<arrow::Table> ConcatenateTablesByRows(
+    const std::vector<std::shared_ptr<arrow::Table>>& tables);
+
+std::shared_ptr<arrow::Table> LoadAndMergeTablesByColumns(
+    const std::vector<std::string>& parquet_paths);
+std::shared_ptr<arrow::Table> LoadAndMergeTablesByColumns(
+    const std::vector<std::string>& parquet_paths,
+    const std::vector<std::vector<std::string>>& columns_by_path);
 
 }  // namespace pioneerml::utils::parquet

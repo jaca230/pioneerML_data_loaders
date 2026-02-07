@@ -2,15 +2,11 @@
 
 #include "pioneerml_dataloaders/configurable/data_derivers/time_grouper.h"
 #include "pioneerml_dataloaders/configurable/data_derivers/group_summary_deriver.h"
-#include "pioneerml_dataloaders/io/parquet_reader.h"
 #include "pioneerml_dataloaders/batch/group_classifier_batch.h"
 #include "pioneerml_dataloaders/utils/parallel/parallel.h"
 #include "pioneerml_dataloaders/utils/timing/scoped_timer.h"
 
 #include <arrow/api.h>
-#include <arrow/buffer.h>
-#include <arrow/buffer_builder.h>
-#include <arrow/status.h>
 
 #include <algorithm>
 #include <cmath>
@@ -28,7 +24,6 @@ GroupClassifierEventLoader::GroupClassifierEventLoader() {
       "hits_z",
       "hits_edep",
       "hits_strip_type",
-      "hits_pdg_id",
       "hits_time",
       "hits_time_group",
   };
@@ -36,9 +31,6 @@ GroupClassifierEventLoader::GroupClassifierEventLoader() {
       "pion_in_group",
       "muon_in_group",
       "mip_in_group",
-      "total_pion_energy",
-      "total_muon_energy",
-      "total_mip_energy",
   };
   ConfigureDerivers(nullptr);
 }
@@ -71,395 +63,352 @@ void GroupClassifierEventLoader::ConfigureDerivers(const nlohmann::json* deriver
   AddDeriver(
       {"pion_in_group",
        "muon_in_group",
-       "mip_in_group",
-       "total_pion_energy",
-       "total_muon_energy",
-       "total_mip_energy"},
+       "mip_in_group"},
       group_summary);
 }
 
-TrainingBundle GroupClassifierEventLoader::LoadTraining(const std::string& parquet_path) const {
-  auto table = AddDerivedColumns(LoadTable(parquet_path));
-  auto required = MergeColumns(input_columns_, target_columns_);
-  ValidateColumns(*table, required, {}, true, "GroupClassifierEventLoader training");
-  auto batch = BuildGraph(*table);
-  return SplitInputsTargets(std::move(batch));
+void GroupClassifierEventLoader::CountNodeEdgePerRow(const int32_t* z_offsets,
+                                                     int64_t rows,
+                                                     std::vector<int64_t>* node_counts,
+                                                     std::vector<int64_t>* edge_counts) const {
+  utils::parallel::Parallel::For(0, rows, [&](int64_t row) {
+    int64_t n = static_cast<int64_t>(z_offsets[row + 1] - z_offsets[row]);
+    (*node_counts)[row] = n;
+    (*edge_counts)[row] = n * (n - 1);
+  });
+}
+
+void GroupClassifierEventLoader::CountGroupsForRows(const int32_t* z_offsets,
+                                                    const int32_t* tg_offsets,
+                                                    const int64_t* tg_raw,
+                                                    int64_t rows,
+                                                    std::vector<int64_t>* group_counts) const {
+  utils::parallel::Parallel::For(0, rows, [&](int64_t row) {
+    const int64_t n = static_cast<int64_t>(z_offsets[row + 1] - z_offsets[row]);
+    if (n == 0) {
+      (*group_counts)[row] = 0;
+      return;
+    }
+    const int32_t tg_start = tg_offsets[row];
+    int64_t max_group = -1;
+    for (int64_t i = 0; i < n; ++i) {
+      const int64_t tg_val = tg_raw[tg_start + i];
+      if (tg_val > max_group) {
+        max_group = tg_val;
+      }
+    }
+    const int64_t groups_for_row = std::max<int64_t>(0, max_group + 1);
+    if (groups_for_row == 0 && n > 0) {
+      throw std::runtime_error("No time groups found for non-empty event.");
+    }
+    (*group_counts)[row] = groups_for_row;
+  });
+}
+
+void GroupClassifierEventLoader::EncodeTargets(const ColumnMap& target_cols,
+                                               const std::vector<int64_t>& group_counts,
+                                               const std::vector<int64_t>& row_group_offsets,
+                                               int64_t rows,
+                                               float* y) const {
+  const auto& pion_list =
+      static_cast<const arrow::ListArray&>(*target_cols.at("pion_in_group")->chunk(0));
+  const auto& muon_list =
+      static_cast<const arrow::ListArray&>(*target_cols.at("muon_in_group")->chunk(0));
+  const auto& mip_list =
+      static_cast<const arrow::ListArray&>(*target_cols.at("mip_in_group")->chunk(0));
+
+  auto pion_values =
+      std::static_pointer_cast<arrow::NumericArray<arrow::Int32Type>>(pion_list.values());
+  auto muon_values =
+      std::static_pointer_cast<arrow::NumericArray<arrow::Int32Type>>(muon_list.values());
+  auto mip_values =
+      std::static_pointer_cast<arrow::NumericArray<arrow::Int32Type>>(mip_list.values());
+
+  const int32_t* pion_raw = pion_values->raw_values();
+  const int32_t* muon_raw = muon_values->raw_values();
+  const int32_t* mip_raw = mip_values->raw_values();
+
+  const int32_t* pion_offsets = pion_list.raw_value_offsets();
+  const int32_t* muon_offsets = muon_list.raw_value_offsets();
+  const int32_t* mip_offsets = mip_list.raw_value_offsets();
+
+  utils::parallel::Parallel::For(0, rows, [&](int64_t row) {
+    auto check_offsets = [&](const int32_t* offsets) {
+      return offsets[row + 1] - offsets[row];
+    };
+    const int64_t count = check_offsets(pion_offsets);
+    if (count != check_offsets(muon_offsets) || count != check_offsets(mip_offsets)) {
+      throw std::runtime_error("Target list columns have mismatched lengths.");
+    }
+    if (count != group_counts[row]) {
+      throw std::runtime_error("Target list length does not match time groups.");
+    }
+    const int64_t base_group = row_group_offsets[row];
+    const int32_t start = pion_offsets[row];
+    for (int64_t g = 0; g < count; ++g) {
+      const int64_t base = (base_group + g) * 3;
+      const int32_t idx = start + static_cast<int32_t>(g);
+      y[base] = static_cast<float>(pion_raw[idx]);
+      y[base + 1] = static_cast<float>(muon_raw[idx]);
+      y[base + 2] = static_cast<float>(mip_raw[idx]);
+    }
+  });
 }
 
 TrainingBundle GroupClassifierEventLoader::LoadTraining(
-    const std::vector<std::string>& parquet_paths) const {
-  auto table = LoadAndConcatenateTables(parquet_paths, true);
-  auto required = MergeColumns(input_columns_, target_columns_);
-  ValidateColumns(*table, required, {}, true, "GroupClassifierEventLoader training");
-  auto batch = BuildGraph(*table);
+    const std::shared_ptr<arrow::Table>& table) const {
+  auto prepared = PrepareTable(table, true);
+  auto required = utils::parquet::MergeColumns(input_columns_, target_columns_);
+  utils::parquet::ValidateColumns(
+      *prepared, required, {}, true, "GroupClassifierEventLoader training");
+  auto batch = BuildGraph(*prepared);
   return SplitInputsTargets(std::move(batch));
 }
 
-InferenceBundle GroupClassifierEventLoader::LoadInference(const std::string& parquet_path) const {
-  auto table = AddDerivedColumns(LoadTable(parquet_path));
-  ValidateColumns(*table, input_columns_, target_columns_, true, "GroupClassifierEventLoader inputs");
-  InferenceBundle out;
-  out.inputs = BuildGraph(*table);
-  return out;
-}
-
 InferenceBundle GroupClassifierEventLoader::LoadInference(
-    const std::vector<std::string>& parquet_paths) const {
-  auto table = LoadAndConcatenateTables(parquet_paths, true);
-  ValidateColumns(*table, input_columns_, target_columns_, true, "GroupClassifierEventLoader inputs");
+    const std::shared_ptr<arrow::Table>& table) const {
+  auto prepared = PrepareTable(table, true);
+  utils::parquet::ValidateColumns(
+      *prepared, input_columns_, target_columns_, true, "GroupClassifierEventLoader inputs");
   InferenceBundle out;
-  out.inputs = BuildGraph(*table);
+  out.inputs = BuildGraph(*prepared);
   return out;
-}
-
-std::shared_ptr<arrow::Table> GroupClassifierEventLoader::LoadTable(const std::string& parquet_path) const {
-  io::ParquetReader reader;
-  return reader.ReadTable(parquet_path);
 }
 
 std::unique_ptr<BaseBatch> GroupClassifierEventLoader::BuildGraph(const arrow::Table& table) const {
   utils::timing::ScopedTimer total_timer("group_classifier_event.build_graph");
-  auto input_cols = BindColumns(table, input_columns_, true, true, "GroupClassifierEventLoader inputs");
-  auto target_cols = BindColumns(table, target_columns_, false, true, "GroupClassifierEventLoader targets");
-  const bool has_targets = target_cols.size() == target_columns_.size();
-
-  const auto& hits_x = static_cast<const arrow::ListArray&>(*input_cols.at("hits_x")->chunk(0));
-  const auto& hits_y = static_cast<const arrow::ListArray&>(*input_cols.at("hits_y")->chunk(0));
-  const auto& hits_z = static_cast<const arrow::ListArray&>(*input_cols.at("hits_z")->chunk(0));
-  const auto& hits_edep = static_cast<const arrow::ListArray&>(*input_cols.at("hits_edep")->chunk(0));
-  const auto& hits_view = static_cast<const arrow::ListArray&>(*input_cols.at("hits_strip_type")->chunk(0));
-  const auto& hits_time_group = static_cast<const arrow::ListArray&>(
-      *input_cols.at("hits_time_group")->chunk(0));
-
-  struct NumericAccessor {
-    std::shared_ptr<arrow::Array> arr;
-    const float* f{nullptr};
-    const double* d{nullptr};
-    bool is_double{false};
-
-    bool IsValid(int64_t idx) const { return arr && arr->IsValid(idx); }
-    double Value(int64_t idx) const { return is_double ? d[idx] : static_cast<double>(f[idx]); }
-  };
-
-  auto make_numeric_accessor = [](const std::shared_ptr<arrow::Array>& arr) -> NumericAccessor {
-    NumericAccessor out;
-    out.arr = arr;
-    if (arr->type_id() == arrow::Type::DOUBLE) {
-      auto values = std::static_pointer_cast<arrow::NumericArray<arrow::DoubleType>>(arr);
-      out.d = values->raw_values();
-      out.is_double = true;
-      return out;
-    }
-    if (arr->type_id() == arrow::Type::FLOAT) {
-      auto values = std::static_pointer_cast<arrow::NumericArray<arrow::FloatType>>(arr);
-      out.f = values->raw_values();
-      out.is_double = false;
-      return out;
-    }
-    throw std::runtime_error("Unsupported numeric type in group classifier event loader.");
-  };
-
-  auto x_values = make_numeric_accessor(hits_x.values());
-  auto y_values = make_numeric_accessor(hits_y.values());
-  auto z_values = make_numeric_accessor(hits_z.values());
-  auto edep_values = make_numeric_accessor(hits_edep.values());
-
-  auto view_values = std::static_pointer_cast<arrow::NumericArray<arrow::Int32Type>>(hits_view.values());
-  auto tg_values = std::static_pointer_cast<arrow::NumericArray<arrow::Int64Type>>(hits_time_group.values());
-
-  const int32_t* view_raw = view_values->raw_values();
-  const int64_t* tg_raw = tg_values->raw_values();
-
-  const int32_t* z_offsets = hits_z.raw_value_offsets();
-  const int32_t* tg_offsets = hits_time_group.raw_value_offsets();
-
-  const int64_t rows = table.num_rows();
-  std::vector<int64_t> node_counts(rows, 0);
-  std::vector<int64_t> edge_counts(rows, 0);
-  std::vector<int64_t> group_counts(rows, 0);
-
+  BuildContext ctx;
+  BuildBuffers bufs;
   {
-    utils::timing::ScopedTimer count_timer("group_classifier_event.count_nodes_edges");
-    utils::parallel::Parallel::For(0, rows, [&](int64_t row) {
-      int64_t n = static_cast<int64_t>(z_offsets[row + 1] - z_offsets[row]);
-      node_counts[row] = n;
-      edge_counts[row] = n * (n - 1);
-    });
+    utils::timing::ScopedTimer timer("group_classifier_event.phase0_initialize");
+    BuildGraphPhase0Initialize(table, &ctx);
   }
-
-  auto node_offsets = utils::parallel::Parallel::PrefixSum(node_counts);
-  auto edge_offsets = utils::parallel::Parallel::PrefixSum(edge_counts);
-  const int64_t total_nodes = node_offsets.back();
-  const int64_t total_edges = edge_offsets.back();
-
-  auto alloc_buffer = [](int64_t bytes) -> std::shared_ptr<arrow::Buffer> {
-    auto result = arrow::AllocateBuffer(bytes);
-    if (!result.ok()) {
-      throw std::runtime_error(result.status().ToString());
-    }
-    return std::shared_ptr<arrow::Buffer>(std::move(result).ValueOrDie());
-  };
-
-  auto node_feat_buf = alloc_buffer(total_nodes * static_cast<int64_t>(sizeof(float)) * 4);
-  auto edge_index_buf = alloc_buffer(total_edges * static_cast<int64_t>(sizeof(int64_t)) * 2);
-  auto edge_attr_buf = alloc_buffer(total_edges * static_cast<int64_t>(sizeof(float)) * 4);
-  auto time_group_buf = alloc_buffer(total_nodes * static_cast<int64_t>(sizeof(int64_t)));
-  auto node_ptr_buf = alloc_buffer((rows + 1) * static_cast<int64_t>(sizeof(int64_t)));
-  auto edge_ptr_buf = alloc_buffer((rows + 1) * static_cast<int64_t>(sizeof(int64_t)));
-  auto group_ptr_buf = alloc_buffer((rows + 1) * static_cast<int64_t>(sizeof(int64_t)));
-  auto u_buf = alloc_buffer(rows * static_cast<int64_t>(sizeof(float)));
-
-  auto* node_feat = reinterpret_cast<float*>(node_feat_buf->mutable_data());
-  auto* edge_index = reinterpret_cast<int64_t*>(edge_index_buf->mutable_data());
-  auto* edge_attr = reinterpret_cast<float*>(edge_attr_buf->mutable_data());
-  auto* time_group_ids = reinterpret_cast<int64_t*>(time_group_buf->mutable_data());
-  auto* node_ptr = reinterpret_cast<int64_t*>(node_ptr_buf->mutable_data());
-  auto* edge_ptr = reinterpret_cast<int64_t*>(edge_ptr_buf->mutable_data());
-  auto* group_ptr = reinterpret_cast<int64_t*>(group_ptr_buf->mutable_data());
-  auto* u = reinterpret_cast<float*>(u_buf->mutable_data());
-
-  for (int64_t row = 0; row <= rows; ++row) {
-    node_ptr[row] = node_offsets[row];
-    edge_ptr[row] = edge_offsets[row];
-  }
-
   {
-    utils::timing::ScopedTimer build_timer("group_classifier_event.build_rows");
-    utils::parallel::Parallel::For(0, rows, [&](int64_t row) {
-      const int64_t n = node_counts[row];
-      const int64_t node_offset = node_offsets[row];
-      const int64_t edge_offset = edge_offsets[row];
-      const int32_t start = z_offsets[row];
-      const int32_t tg_start = tg_offsets[row];
-      const int64_t tg_len = static_cast<int64_t>(tg_offsets[row + 1] - tg_offsets[row]);
+    utils::timing::ScopedTimer timer("group_classifier_event.phase1_count");
+    BuildGraphPhase1Count(&ctx);
+  }
+  {
+    utils::timing::ScopedTimer timer("group_classifier_event.phase2_offsets");
+    BuildGraphPhase2Offsets(&ctx);
+  }
+  {
+    utils::timing::ScopedTimer timer("group_classifier_event.phase3_allocate");
+    BuildGraphPhase3Allocate(ctx, &bufs);
+  }
+  {
+    utils::timing::ScopedTimer timer("group_classifier_event.phase4_populate");
+    BuildGraphPhase4Populate(ctx, &bufs);
+  }
+  {
+    utils::timing::ScopedTimer timer("group_classifier_event.phase5_finalize");
+    return BuildGraphPhase5Finalize(ctx, &bufs);
+  }
+}
 
-      double sum_edep = 0.0;
+void GroupClassifierEventLoader::BuildGraphPhase0Initialize(const arrow::Table& table,
+                                                            BuildContext* ctx) const {
+  ctx->input_cols = utils::parquet::BindColumns(
+      table, input_columns_, true, true, "GroupClassifierEventLoader inputs");
+  ctx->target_cols = utils::parquet::BindColumns(
+      table, target_columns_, false, true, "GroupClassifierEventLoader targets");
+  ctx->has_targets = ctx->target_cols.size() == target_columns_.size();
 
-      int64_t max_group = -1;
-      for (int64_t i = 0; i < n; ++i) {
-        const int64_t idx = node_offset + i;
-        const int64_t base = idx * 4;
-        const int32_t view = view_raw[start + i];
-        double coord = 0.0;
-        if (view == 0) {
-          if (x_values.IsValid(start + i)) {
-            coord = x_values.Value(start + i);
-          } else if (y_values.IsValid(start + i)) {
-            coord = y_values.Value(start + i);
-          }
-        } else {
-          if (y_values.IsValid(start + i)) {
-            coord = y_values.Value(start + i);
-          } else if (x_values.IsValid(start + i)) {
-            coord = x_values.Value(start + i);
-          }
-        }
+  ctx->hits_x =
+      &static_cast<const arrow::ListArray&>(*ctx->input_cols.at("hits_x")->chunk(0));
+  ctx->hits_y =
+      &static_cast<const arrow::ListArray&>(*ctx->input_cols.at("hits_y")->chunk(0));
+  ctx->hits_z =
+      &static_cast<const arrow::ListArray&>(*ctx->input_cols.at("hits_z")->chunk(0));
+  ctx->hits_edep =
+      &static_cast<const arrow::ListArray&>(*ctx->input_cols.at("hits_edep")->chunk(0));
+  ctx->hits_view =
+      &static_cast<const arrow::ListArray&>(*ctx->input_cols.at("hits_strip_type")->chunk(0));
+  ctx->hits_time_group = &static_cast<const arrow::ListArray&>(
+      *ctx->input_cols.at("hits_time_group")->chunk(0));
 
-        node_feat[base] = static_cast<float>(coord);
-        node_feat[base + 1] = static_cast<float>(
-            z_values.IsValid(start + i) ? z_values.Value(start + i) : 0.0);
-        node_feat[base + 2] = static_cast<float>(
-            edep_values.IsValid(start + i) ? edep_values.Value(start + i) : 0.0);
-        node_feat[base + 3] = static_cast<float>(view);
+  ctx->x_values = MakeNumericAccessor(ctx->hits_x->values(), "group classifier event x");
+  ctx->y_values = MakeNumericAccessor(ctx->hits_y->values(), "group classifier event y");
+  ctx->z_values = MakeNumericAccessor(ctx->hits_z->values(), "group classifier event z");
+  ctx->edep_values =
+      MakeNumericAccessor(ctx->hits_edep->values(), "group classifier event edep");
 
-        if (tg_len < n) {
-          throw std::runtime_error("hits_time_group length mismatch with hits.");
-        }
-        const int64_t tg_val = tg_raw[tg_start + i];
-        time_group_ids[idx] = tg_val;
-        if (tg_val > max_group) {
-          max_group = tg_val;
-        }
+  auto view_values =
+      std::static_pointer_cast<arrow::NumericArray<arrow::Int32Type>>(ctx->hits_view->values());
+  auto tg_values = std::static_pointer_cast<arrow::NumericArray<arrow::Int64Type>>(
+      ctx->hits_time_group->values());
+  ctx->view_raw = view_values->raw_values();
+  ctx->tg_raw = tg_values->raw_values();
+  ctx->z_offsets = ctx->hits_z->raw_value_offsets();
+  ctx->tg_offsets = ctx->hits_time_group->raw_value_offsets();
 
-        sum_edep += edep_values.IsValid(start + i) ? edep_values.Value(start + i) : 0.0;
+  ctx->rows = table.num_rows();
+  ctx->node_counts.assign(static_cast<size_t>(ctx->rows), 0);
+  ctx->edge_counts.assign(static_cast<size_t>(ctx->rows), 0);
+  ctx->group_counts.assign(static_cast<size_t>(ctx->rows), 0);
+}
+
+void GroupClassifierEventLoader::BuildGraphPhase1Count(BuildContext* ctx) const {
+  CountNodeEdgePerRow(ctx->z_offsets, ctx->rows, &ctx->node_counts, &ctx->edge_counts);
+  CountGroupsForRows(
+      ctx->z_offsets, ctx->tg_offsets, ctx->tg_raw, ctx->rows, &ctx->group_counts);
+}
+
+void GroupClassifierEventLoader::BuildGraphPhase2Offsets(BuildContext* ctx) const {
+  ctx->node_offsets = BuildOffsets(ctx->node_counts);
+  ctx->edge_offsets = BuildOffsets(ctx->edge_counts);
+  ctx->total_nodes = ctx->node_offsets.back();
+  ctx->total_edges = ctx->edge_offsets.back();
+
+  ctx->row_group_offsets.assign(static_cast<size_t>(ctx->rows + 1), 0);
+  for (int64_t row = 0; row < ctx->rows; ++row) {
+    ctx->row_group_offsets[static_cast<size_t>(row + 1)] =
+        ctx->row_group_offsets[static_cast<size_t>(row)] +
+        ctx->group_counts[static_cast<size_t>(row)];
+  }
+  ctx->total_groups = ctx->row_group_offsets.back();
+}
+
+void GroupClassifierEventLoader::BuildGraphPhase3Allocate(const BuildContext& ctx,
+                                                          BuildBuffers* bufs) const {
+  bufs->node_feat_buf =
+      AllocBuffer(ctx.total_nodes * static_cast<int64_t>(sizeof(float)) * 4);
+  bufs->edge_index_buf =
+      AllocBuffer(ctx.total_edges * static_cast<int64_t>(sizeof(int64_t)) * 2);
+  bufs->edge_attr_buf =
+      AllocBuffer(ctx.total_edges * static_cast<int64_t>(sizeof(float)) * 4);
+  bufs->time_group_buf =
+      AllocBuffer(ctx.total_nodes * static_cast<int64_t>(sizeof(int64_t)));
+  bufs->node_ptr_buf =
+      AllocBuffer((ctx.rows + 1) * static_cast<int64_t>(sizeof(int64_t)));
+  bufs->edge_ptr_buf =
+      AllocBuffer((ctx.rows + 1) * static_cast<int64_t>(sizeof(int64_t)));
+  bufs->group_ptr_buf =
+      AllocBuffer((ctx.rows + 1) * static_cast<int64_t>(sizeof(int64_t)));
+  bufs->u_buf = AllocBuffer(ctx.rows * static_cast<int64_t>(sizeof(float)));
+
+  bufs->node_feat = reinterpret_cast<float*>(bufs->node_feat_buf->mutable_data());
+  bufs->edge_index = reinterpret_cast<int64_t*>(bufs->edge_index_buf->mutable_data());
+  bufs->edge_attr = reinterpret_cast<float*>(bufs->edge_attr_buf->mutable_data());
+  bufs->time_group_ids = reinterpret_cast<int64_t*>(bufs->time_group_buf->mutable_data());
+  bufs->node_ptr = reinterpret_cast<int64_t*>(bufs->node_ptr_buf->mutable_data());
+  bufs->edge_ptr = reinterpret_cast<int64_t*>(bufs->edge_ptr_buf->mutable_data());
+  bufs->group_ptr = reinterpret_cast<int64_t*>(bufs->group_ptr_buf->mutable_data());
+  bufs->u = reinterpret_cast<float*>(bufs->u_buf->mutable_data());
+
+  FillPointerArrayFromOffsets(ctx.node_offsets, bufs->node_ptr);
+  FillPointerArrayFromOffsets(ctx.edge_offsets, bufs->edge_ptr);
+}
+
+void GroupClassifierEventLoader::BuildGraphPhase4Populate(const BuildContext& ctx,
+                                                          BuildBuffers* bufs) const {
+  utils::parallel::Parallel::For(0, ctx.rows, [&](int64_t row) {
+    const int64_t n = ctx.node_counts[static_cast<size_t>(row)];
+    const int64_t node_offset = ctx.node_offsets[static_cast<size_t>(row)];
+    const int64_t edge_offset = ctx.edge_offsets[static_cast<size_t>(row)];
+    const int32_t start = ctx.z_offsets[row];
+    const int32_t tg_start = ctx.tg_offsets[row];
+    const int64_t tg_len =
+        static_cast<int64_t>(ctx.tg_offsets[row + 1] - ctx.tg_offsets[row]);
+
+    std::vector<float> coord_local(static_cast<size_t>(n), 0.0f);
+    std::vector<float> z_local(static_cast<size_t>(n), 0.0f);
+    std::vector<float> e_local(static_cast<size_t>(n), 0.0f);
+    std::vector<int32_t> view_local(static_cast<size_t>(n), 0);
+
+    double sum_edep = 0.0;
+    for (int64_t i = 0; i < n; ++i) {
+      const int64_t idx = node_offset + i;
+      const int64_t base = idx * 4;
+      const int32_t view = ctx.view_raw[start + i];
+      const double coord =
+          ResolveCoordinateForView(ctx.x_values, ctx.y_values, view, start + i);
+      const float z_value = static_cast<float>(
+          ctx.z_values.IsValid(start + i) ? ctx.z_values.Value(start + i) : 0.0);
+      const float e_value = static_cast<float>(
+          ctx.edep_values.IsValid(start + i) ? ctx.edep_values.Value(start + i) : 0.0);
+      coord_local[static_cast<size_t>(i)] = static_cast<float>(coord);
+      z_local[static_cast<size_t>(i)] = z_value;
+      e_local[static_cast<size_t>(i)] = e_value;
+      view_local[static_cast<size_t>(i)] = view;
+
+      bufs->node_feat[base] = coord_local[static_cast<size_t>(i)];
+      bufs->node_feat[base + 1] = z_value;
+      bufs->node_feat[base + 2] = e_value;
+      bufs->node_feat[base + 3] = static_cast<float>(view);
+
+      if (tg_len < n) {
+        throw std::runtime_error("hits_time_group length mismatch with hits.");
       }
+      bufs->time_group_ids[idx] = ctx.tg_raw[tg_start + i];
+      sum_edep += e_value;
+    }
+    bufs->u[row] = static_cast<float>(sum_edep);
 
-      u[row] = static_cast<float>(sum_edep);
-
-      const int64_t groups_for_row = std::max<int64_t>(0, max_group + 1);
-      if (groups_for_row == 0 && n > 0) {
-        throw std::runtime_error("No time groups found for non-empty event.");
-      }
-      group_counts[row] = groups_for_row;
-
-      int64_t edge_local = 0;
-      for (int64_t i = 0; i < n; ++i) {
-        const int32_t view_i = view_raw[start + i];
-        double coord_i = 0.0;
-        if (view_i == 0) {
-          if (x_values.IsValid(start + i)) {
-            coord_i = x_values.Value(start + i);
-          } else if (y_values.IsValid(start + i)) {
-            coord_i = y_values.Value(start + i);
-          }
-        } else {
-          if (y_values.IsValid(start + i)) {
-            coord_i = y_values.Value(start + i);
-          } else if (x_values.IsValid(start + i)) {
-            coord_i = x_values.Value(start + i);
-          }
+    int64_t edge_local = 0;
+    for (int64_t i = 0; i < n; ++i) {
+      const int32_t view_i = view_local[static_cast<size_t>(i)];
+      const float coord_i = coord_local[static_cast<size_t>(i)];
+      const float z_i = z_local[static_cast<size_t>(i)];
+      const float e_i = e_local[static_cast<size_t>(i)];
+      for (int64_t j = 0; j < n; ++j) {
+        if (i == j) {
+          continue;
         }
-        for (int64_t j = 0; j < n; ++j) {
-          if (i == j) continue;
-          const int64_t edge_idx = edge_offset + edge_local;
-          const int64_t edge_base = edge_idx * 2;
-          const int64_t attr_base = edge_idx * 4;
+        const int64_t edge_idx = edge_offset + edge_local;
+        const int64_t edge_base = edge_idx * 2;
+        const int64_t attr_base = edge_idx * 4;
 
-          edge_index[edge_base] = node_offset + i;
-          edge_index[edge_base + 1] = node_offset + j;
+        bufs->edge_index[edge_base] = node_offset + i;
+        bufs->edge_index[edge_base + 1] = node_offset + j;
 
-          const int32_t view_j = view_raw[start + j];
-          double coord_j = 0.0;
-          if (view_j == 0) {
-            if (x_values.IsValid(start + j)) {
-              coord_j = x_values.Value(start + j);
-            } else if (y_values.IsValid(start + j)) {
-              coord_j = y_values.Value(start + j);
-            }
-          } else {
-            if (y_values.IsValid(start + j)) {
-              coord_j = y_values.Value(start + j);
-            } else if (x_values.IsValid(start + j)) {
-              coord_j = x_values.Value(start + j);
-            }
-          }
+        const int32_t view_j = view_local[static_cast<size_t>(j)];
+        const float coord_j = coord_local[static_cast<size_t>(j)];
+        const float z_j = z_local[static_cast<size_t>(j)];
+        const float e_j = e_local[static_cast<size_t>(j)];
 
-          const double z_i = z_values.IsValid(start + i) ? z_values.Value(start + i) : 0.0;
-          const double z_j = z_values.IsValid(start + j) ? z_values.Value(start + j) : 0.0;
-          const double e_i = edep_values.IsValid(start + i) ? edep_values.Value(start + i) : 0.0;
-          const double e_j = edep_values.IsValid(start + j) ? edep_values.Value(start + j) : 0.0;
-
-          edge_attr[attr_base] = static_cast<float>(coord_j - coord_i);
-          edge_attr[attr_base + 1] = static_cast<float>(z_j - z_i);
-          edge_attr[attr_base + 2] = static_cast<float>(e_j - e_i);
-          edge_attr[attr_base + 3] = (view_i == view_j) ? 1.0f : 0.0f;
-
-          edge_local++;
-        }
+        bufs->edge_attr[attr_base] = coord_j - coord_i;
+        bufs->edge_attr[attr_base + 1] = z_j - z_i;
+        bufs->edge_attr[attr_base + 2] = e_j - e_i;
+        bufs->edge_attr[attr_base + 3] = (view_i == view_j) ? 1.0f : 0.0f;
+        edge_local++;
       }
-    });
+    }
+  });
+}
+
+std::unique_ptr<BaseBatch> GroupClassifierEventLoader::BuildGraphPhase5Finalize(
+    const BuildContext& ctx,
+    BuildBuffers* bufs) const {
+  bufs->group_ptr[0] = 0;
+  for (int64_t row = 0; row < ctx.rows; ++row) {
+    bufs->group_ptr[row + 1] =
+        bufs->group_ptr[row] + ctx.group_counts[static_cast<size_t>(row)];
   }
 
-  utils::timing::ScopedTimer finalize_timer("group_classifier_event.finalize_arrays");
-  auto make_array = [](std::shared_ptr<arrow::Buffer> buf,
-                       std::shared_ptr<arrow::DataType> type,
-                       int64_t length) {
-    auto data = arrow::ArrayData::Make(type, length, {nullptr, std::move(buf)});
-    return arrow::MakeArray(std::move(data));
-  };
+  if (ctx.has_targets) {
+    bufs->y_buf =
+        AllocBuffer(ctx.total_groups * static_cast<int64_t>(sizeof(float)) * 3);
+    bufs->y = reinterpret_cast<float*>(bufs->y_buf->mutable_data());
+    EncodeTargets(
+        ctx.target_cols, ctx.group_counts, ctx.row_group_offsets, ctx.rows, bufs->y);
+  }
 
   auto out = std::make_unique<GroupClassifierInputs>();
-  group_ptr[0] = 0;
-  for (int64_t row = 0; row < rows; ++row) {
-    group_ptr[row + 1] = group_ptr[row] + group_counts[row];
-  }
-  const int64_t total_groups = group_ptr[rows];
-
-  std::shared_ptr<arrow::Buffer> y_buf;
-  std::shared_ptr<arrow::Buffer> y_energy_buf;
-  float* y = nullptr;
-  float* y_energy = nullptr;
-  if (has_targets) {
-    y_buf = alloc_buffer(total_groups * static_cast<int64_t>(sizeof(float)) * 3);
-    y_energy_buf = alloc_buffer(total_groups * static_cast<int64_t>(sizeof(float)) * 3);
-    y = reinterpret_cast<float*>(y_buf->mutable_data());
-    y_energy = reinterpret_cast<float*>(y_energy_buf->mutable_data());
-
-    const auto& pion_list = static_cast<const arrow::ListArray&>(
-        *target_cols.at("pion_in_group")->chunk(0));
-    const auto& muon_list = static_cast<const arrow::ListArray&>(
-        *target_cols.at("muon_in_group")->chunk(0));
-    const auto& mip_list = static_cast<const arrow::ListArray&>(
-        *target_cols.at("mip_in_group")->chunk(0));
-    const auto& pion_energy_list = static_cast<const arrow::ListArray&>(
-        *target_cols.at("total_pion_energy")->chunk(0));
-    const auto& muon_energy_list = static_cast<const arrow::ListArray&>(
-        *target_cols.at("total_muon_energy")->chunk(0));
-    const auto& mip_energy_list = static_cast<const arrow::ListArray&>(
-        *target_cols.at("total_mip_energy")->chunk(0));
-
-    auto pion_values =
-        std::static_pointer_cast<arrow::NumericArray<arrow::Int32Type>>(
-            pion_list.values());
-    auto muon_values =
-        std::static_pointer_cast<arrow::NumericArray<arrow::Int32Type>>(
-            muon_list.values());
-    auto mip_values =
-        std::static_pointer_cast<arrow::NumericArray<arrow::Int32Type>>(
-            mip_list.values());
-    auto pion_energy_values =
-        std::static_pointer_cast<arrow::NumericArray<arrow::DoubleType>>(
-            pion_energy_list.values());
-    auto muon_energy_values =
-        std::static_pointer_cast<arrow::NumericArray<arrow::DoubleType>>(
-            muon_energy_list.values());
-    auto mip_energy_values =
-        std::static_pointer_cast<arrow::NumericArray<arrow::DoubleType>>(
-            mip_energy_list.values());
-
-    const int32_t* pion_raw = pion_values->raw_values();
-    const int32_t* muon_raw = muon_values->raw_values();
-    const int32_t* mip_raw = mip_values->raw_values();
-    const double* e_pi_raw = pion_energy_values->raw_values();
-    const double* e_mu_raw = muon_energy_values->raw_values();
-    const double* e_mip_raw = mip_energy_values->raw_values();
-
-    const int32_t* pion_offsets = pion_list.raw_value_offsets();
-    const int32_t* muon_offsets = muon_list.raw_value_offsets();
-    const int32_t* mip_offsets = mip_list.raw_value_offsets();
-    const int32_t* e_pi_offsets = pion_energy_list.raw_value_offsets();
-    const int32_t* e_mu_offsets = muon_energy_list.raw_value_offsets();
-    const int32_t* e_mip_offsets = mip_energy_list.raw_value_offsets();
-
-    utils::parallel::Parallel::For(0, rows, [&](int64_t row) {
-      auto check_offsets = [&](const int32_t* offsets) {
-        return offsets[row + 1] - offsets[row];
-      };
-      const int64_t count = check_offsets(pion_offsets);
-      if (count != check_offsets(muon_offsets) ||
-          count != check_offsets(mip_offsets) ||
-          count != check_offsets(e_pi_offsets) ||
-          count != check_offsets(e_mu_offsets) ||
-          count != check_offsets(e_mip_offsets)) {
-        throw std::runtime_error("Target list columns have mismatched lengths.");
-      }
-      if (count != group_counts[row]) {
-        throw std::runtime_error("Target list length does not match time groups.");
-      }
-      const int64_t base_group = group_ptr[row];
-      const int32_t start = pion_offsets[row];
-      for (int64_t g = 0; g < count; ++g) {
-        const int64_t base = (base_group + g) * 3;
-        const int32_t idx = start + static_cast<int32_t>(g);
-        y[base] = static_cast<float>(pion_raw[idx]);
-        y[base + 1] = static_cast<float>(muon_raw[idx]);
-        y[base + 2] = static_cast<float>(mip_raw[idx]);
-        y_energy[base] = static_cast<float>(e_pi_raw[idx]);
-        y_energy[base + 1] = static_cast<float>(e_mu_raw[idx]);
-        y_energy[base + 2] = static_cast<float>(e_mip_raw[idx]);
-      }
-    });
-  }
-
-  out->node_features = make_array(node_feat_buf, arrow::float32(), total_nodes * 4);
-  out->edge_index = make_array(edge_index_buf, arrow::int64(), total_edges * 2);
-  out->edge_attr = make_array(edge_attr_buf, arrow::float32(), total_edges * 4);
-  out->time_group_ids = make_array(time_group_buf, arrow::int64(), total_nodes);
-  out->node_ptr = make_array(node_ptr_buf, arrow::int64(), rows + 1);
-  out->edge_ptr = make_array(edge_ptr_buf, arrow::int64(), rows + 1);
-  out->group_ptr = make_array(group_ptr_buf, arrow::int64(), rows + 1);
-  out->u = make_array(u_buf, arrow::float32(), rows);
-
-  if (has_targets) {
-    out->y = make_array(y_buf, arrow::float32(), total_groups * 3);
-    out->y_energy = make_array(y_energy_buf, arrow::float32(), total_groups * 3);
+  out->node_features = MakeArray(bufs->node_feat_buf, arrow::float32(), ctx.total_nodes * 4);
+  out->edge_index = MakeArray(bufs->edge_index_buf, arrow::int64(), ctx.total_edges * 2);
+  out->edge_attr = MakeArray(bufs->edge_attr_buf, arrow::float32(), ctx.total_edges * 4);
+  out->time_group_ids = MakeArray(bufs->time_group_buf, arrow::int64(), ctx.total_nodes);
+  out->node_ptr = MakeArray(bufs->node_ptr_buf, arrow::int64(), ctx.rows + 1);
+  out->edge_ptr = MakeArray(bufs->edge_ptr_buf, arrow::int64(), ctx.rows + 1);
+  out->group_ptr = MakeArray(bufs->group_ptr_buf, arrow::int64(), ctx.rows + 1);
+  out->u = MakeArray(bufs->u_buf, arrow::float32(), ctx.rows);
+  if (ctx.has_targets) {
+    out->y = MakeArray(bufs->y_buf, arrow::float32(), ctx.total_groups * 3);
   } else {
     out->y = nullptr;
-    out->y_energy = nullptr;
   }
-
-  out->num_graphs = static_cast<size_t>(rows);
-  out->num_groups = static_cast<size_t>(total_groups);
+  out->num_graphs = static_cast<size_t>(ctx.rows);
+  out->num_groups = static_cast<size_t>(ctx.total_groups);
   return out;
 }
 
@@ -468,16 +417,14 @@ TrainingBundle GroupClassifierEventLoader::SplitInputsTargets(std::unique_ptr<Ba
   if (!typed) {
     throw std::runtime_error("Unexpected batch type in SplitInputsTargets");
   }
-  if (!typed->y || !typed->y_energy) {
+  if (!typed->y) {
     throw std::runtime_error("Training targets are missing. Use LoadInference or provide label columns.");
   }
   auto targets = std::make_unique<GroupClassifierTargets>();
   targets->num_groups = typed->num_groups;
   targets->y = typed->y;
-  targets->y_energy = typed->y_energy;
 
   typed->y.reset();
-  typed->y_energy.reset();
 
   TrainingBundle result;
   result.inputs = std::move(batch_base);
