@@ -10,19 +10,32 @@ pybind11_add_module(
     batch/group_splitter_targets_bindings.cpp
     batch/group_splitter_event_inputs_bindings.cpp
     batch/group_splitter_event_targets_bindings.cpp
+    batch/event_splitter_event_inputs_bindings.cpp
+    batch/event_splitter_event_targets_bindings.cpp
+    batch/endpoint_regressor_inputs_bindings.cpp
+    batch/endpoint_regressor_targets_bindings.cpp
     configurable/dataloaders/base_loader_bindings.cpp
     configurable/dataloaders/graph/group_classifier_loader_bindings.cpp
     configurable/dataloaders/graph/group_classifier_event_loader_bindings.cpp
     configurable/dataloaders/graph/group_splitter_loader_bindings.cpp
     configurable/dataloaders/graph/group_splitter_event_loader_bindings.cpp
+    configurable/dataloaders/graph/event_splitter_event_loader_bindings.cpp
+    configurable/dataloaders/graph/endpoint_regressor_loader_bindings.cpp
+    configurable/dataloaders/graph/endpoint_regressor_event_loader_bindings.cpp
     configurable/input_adapters/graph/group_classifier_input_adapter_bindings.cpp
     configurable/input_adapters/graph/group_classifier_event_input_adapter_bindings.cpp
     configurable/input_adapters/graph/group_splitter_input_adapter_bindings.cpp
     configurable/input_adapters/graph/group_splitter_event_input_adapter_bindings.cpp
+    configurable/input_adapters/graph/event_splitter_event_input_adapter_bindings.cpp
+    configurable/input_adapters/graph/endpoint_regressor_input_adapter_bindings.cpp
+    configurable/input_adapters/graph/endpoint_regressor_event_input_adapter_bindings.cpp
     configurable/output_adapters/graph/group_classifier_output_adapter_bindings.cpp
     configurable/output_adapters/graph/group_classifier_event_output_adapter_bindings.cpp
     configurable/output_adapters/graph/group_splitter_output_adapter_bindings.cpp
     configurable/output_adapters/graph/group_splitter_event_output_adapter_bindings.cpp
+    configurable/output_adapters/graph/event_splitter_event_output_adapter_bindings.cpp
+    configurable/output_adapters/graph/endpoint_regressor_output_adapter_bindings.cpp
+    configurable/output_adapters/graph/endpoint_regressor_event_output_adapter_bindings.cpp
     utils/logging_bindings.cpp
     utils/timing_bindings.cpp
 )

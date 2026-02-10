@@ -12,7 +12,16 @@ const std::vector<std::string> kMainColumns = {
     "hits_edep",
     "hits_strip_type",
     "hits_time",
-    "hits_pdg_id",
+    "hits_contrib_mc_event_id",
+    "hits_contrib_step_id",
+    "steps_mc_event_id",
+    "steps_step_id",
+    "steps_pdg_id",
+    "steps_x",
+    "steps_y",
+    "steps_z",
+    "steps_edep",
+    "steps_time",
 };
 
 const std::vector<std::string> kGroupProbColumns = {

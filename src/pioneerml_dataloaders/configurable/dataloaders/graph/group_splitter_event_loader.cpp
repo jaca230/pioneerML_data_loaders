@@ -8,8 +8,7 @@
 #include <arrow/api.h>
 
 #include "pioneerml_dataloaders/batch/group_splitter_event_batch.h"
-#include "pioneerml_dataloaders/configurable/data_derivers/particle_mask_deriver.h"
-#include "pioneerml_dataloaders/configurable/data_derivers/time_grouper.h"
+#include "pioneerml_dataloaders/configurable/data_derivers/time_group_summary_deriver.h"
 #include "pioneerml_dataloaders/utils/parallel/parallel.h"
 #include "pioneerml_dataloaders/utils/timing/scoped_timer.h"
 
@@ -63,17 +62,19 @@ void GroupSplitterEventLoader::LoadConfig(const nlohmann::json& cfg) {
 void GroupSplitterEventLoader::ConfigureDerivers(const nlohmann::json* derivers_cfg) {
   derivers_.clear();
 
-  auto time_grouper = std::make_shared<data_derivers::TimeGrouper>(time_window_ns_);
-  if (derivers_cfg && derivers_cfg->contains("time_grouper")) {
-    time_grouper->LoadConfig(derivers_cfg->at("time_grouper"));
+  auto time_group_summary =
+      std::make_shared<data_derivers::TimeGroupSummaryDeriver>(
+          time_window_ns_,
+          std::vector<std::string>{
+              "hits_time_group",
+              "hits_pdg_id",
+              "hits_particle_mask",
+          });
+  if (derivers_cfg && derivers_cfg->contains("time_group_summary")) {
+    time_group_summary->LoadConfig(derivers_cfg->at("time_group_summary"));
   }
-  AddDeriver("hits_time_group", time_grouper);
-
-  auto particle_mask = std::make_shared<data_derivers::ParticleMaskDeriver>();
-  if (derivers_cfg && derivers_cfg->contains("particle_mask")) {
-    particle_mask->LoadConfig(derivers_cfg->at("particle_mask"));
-  }
-  AddDeriver("hits_particle_mask", particle_mask);
+  AddDeriver({"hits_time_group", "hits_pdg_id", "hits_particle_mask"},
+             time_group_summary);
 }
 
 void GroupSplitterEventLoader::CountRows(

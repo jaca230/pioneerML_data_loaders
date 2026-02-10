@@ -13,7 +13,7 @@ class GroupSplitterOutputAdapter : public GraphOutputAdapter {
  public:
   GroupSplitterOutputAdapter() = default;
 
-  std::shared_ptr<arrow::Table> BuildGraphTable(
+  std::shared_ptr<arrow::Table> BuildEventTable(
       const std::shared_ptr<arrow::Array>& node_pred,
       const std::shared_ptr<arrow::Array>& node_ptr,
       const std::shared_ptr<arrow::Array>& graph_event_ids,
@@ -25,14 +25,6 @@ class GroupSplitterOutputAdapter : public GraphOutputAdapter {
       const std::shared_ptr<arrow::Array>& node_ptr,
       const std::shared_ptr<arrow::Array>& graph_event_ids,
       const std::shared_ptr<arrow::Array>& graph_group_ids) const;
-
- private:
-  std::shared_ptr<arrow::Array> BuildNodeListColumn(
-      const float* pred_raw,
-      int64_t total_nodes,
-      const int64_t* node_ptr,
-      int64_t num_graphs,
-      int class_index) const;
 };
 
 }  // namespace pioneerml::output_adapters::graph

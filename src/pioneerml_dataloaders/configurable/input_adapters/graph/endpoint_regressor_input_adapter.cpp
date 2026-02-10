@@ -1,4 +1,4 @@
-#include "pioneerml_dataloaders/configurable/input_adapters/graph/group_splitter_input_adapter.h"
+#include "pioneerml_dataloaders/configurable/input_adapters/graph/endpoint_regressor_input_adapter.h"
 
 #include <vector>
 
@@ -30,15 +30,22 @@ const std::vector<std::string> kGroupProbColumns = {
     "pred_mip",
 };
 
+const std::vector<std::string> kSplitterProbColumns = {
+    "pred_hit_pion",
+    "pred_hit_muon",
+    "pred_hit_mip",
+    "time_group_ids",
+};
+
 }  // namespace
 
-GroupSplitterInputAdapter::GroupSplitterInputAdapter() = default;
+EndpointRegressorInputAdapter::EndpointRegressorInputAdapter() = default;
 
-void GroupSplitterInputAdapter::LoadConfig(const nlohmann::json& cfg) {
+void EndpointRegressorInputAdapter::LoadConfig(const nlohmann::json& cfg) {
   ApplyLoaderConfig(cfg);
 }
 
-void GroupSplitterInputAdapter::ApplyLoaderConfig(const nlohmann::json& cfg) {
+void EndpointRegressorInputAdapter::ApplyLoaderConfig(const nlohmann::json& cfg) {
   if (cfg.contains("loader")) {
     loader_.LoadConfig(cfg.at("loader"));
   } else {
@@ -46,17 +53,17 @@ void GroupSplitterInputAdapter::ApplyLoaderConfig(const nlohmann::json& cfg) {
   }
 }
 
-pioneerml::dataloaders::TrainingBundle GroupSplitterInputAdapter::LoadTraining(
+pioneerml::dataloaders::TrainingBundle EndpointRegressorInputAdapter::LoadTraining(
     const nlohmann::json& input_spec) const {
   return loader_.LoadTraining(BuildUnifiedTable(input_spec));
 }
 
-pioneerml::dataloaders::InferenceBundle GroupSplitterInputAdapter::LoadInference(
+pioneerml::dataloaders::InferenceBundle EndpointRegressorInputAdapter::LoadInference(
     const nlohmann::json& input_spec) const {
   return loader_.LoadInference(BuildUnifiedTable(input_spec));
 }
 
-std::shared_ptr<arrow::Table> GroupSplitterInputAdapter::BuildUnifiedTable(
+std::shared_ptr<arrow::Table> EndpointRegressorInputAdapter::BuildUnifiedTable(
     const nlohmann::json& input_spec) const {
   return BuildUnifiedTableFromFilesSpec(
       input_spec,
@@ -66,8 +73,12 @@ std::shared_ptr<arrow::Table> GroupSplitterInputAdapter::BuildUnifiedTable(
                         {"group_probs", "group_probs_file"},
                         kGroupProbColumns,
                         false},
+          JsonFieldSpec{"group_splitter_probs",
+                        {"group_splitter_probs", "group_splitter_probs_file"},
+                        kSplitterProbColumns,
+                        false},
       },
-      "GroupSplitterInputAdapter");
+      "EndpointRegressorInputAdapter");
 }
 
 }  // namespace pioneerml::input_adapters::graph

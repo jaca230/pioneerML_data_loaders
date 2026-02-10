@@ -1,7 +1,6 @@
 #include "pioneerml_dataloaders/configurable/dataloaders/graph/group_classifier_event_loader.h"
 
-#include "pioneerml_dataloaders/configurable/data_derivers/time_grouper.h"
-#include "pioneerml_dataloaders/configurable/data_derivers/group_summary_deriver.h"
+#include "pioneerml_dataloaders/configurable/data_derivers/time_group_summary_deriver.h"
 #include "pioneerml_dataloaders/batch/group_classifier_batch.h"
 #include "pioneerml_dataloaders/utils/parallel/parallel.h"
 #include "pioneerml_dataloaders/utils/timing/scoped_timer.h"
@@ -50,21 +49,20 @@ void GroupClassifierEventLoader::LoadConfig(const nlohmann::json& cfg) {
 void GroupClassifierEventLoader::ConfigureDerivers(const nlohmann::json* derivers_cfg) {
   derivers_.clear();
 
-  auto time_grouper = std::make_shared<data_derivers::TimeGrouper>(time_window_ns_);
-  if (derivers_cfg && derivers_cfg->contains("time_grouper")) {
-    time_grouper->LoadConfig(derivers_cfg->at("time_grouper"));
+  auto time_group_summary =
+      std::make_shared<data_derivers::TimeGroupSummaryDeriver>(
+          time_window_ns_,
+          std::vector<std::string>{
+              "hits_time_group",
+              "pion_in_group",
+              "muon_in_group",
+              "mip_in_group",
+          });
+  if (derivers_cfg && derivers_cfg->contains("time_group_summary")) {
+    time_group_summary->LoadConfig(derivers_cfg->at("time_group_summary"));
   }
-  AddDeriver("hits_time_group", time_grouper);
-
-  auto group_summary = std::make_shared<data_derivers::GroupSummaryDeriver>();
-  if (derivers_cfg && derivers_cfg->contains("group_summary")) {
-    group_summary->LoadConfig(derivers_cfg->at("group_summary"));
-  }
-  AddDeriver(
-      {"pion_in_group",
-       "muon_in_group",
-       "mip_in_group"},
-      group_summary);
+  AddDeriver({"hits_time_group", "pion_in_group", "muon_in_group", "mip_in_group"},
+             time_group_summary);
 }
 
 void GroupClassifierEventLoader::CountNodeEdgePerRow(const int32_t* z_offsets,
